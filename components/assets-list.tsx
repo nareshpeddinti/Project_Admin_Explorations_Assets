@@ -172,16 +172,20 @@ export const TEMPLATE_ASSETS: Record<string, Asset[]> = {
     { id: "ind-asset-9", name: "VFD - Pump Motor", code: "26-MCC-VFD-001", project: "Eastside Manufacturing Plant", type: "VFDs", status: "Installed", statusColor: "blue", lastModified: "3/03/2026" },
     { id: "ind-asset-10", name: "DCS Control System", code: "40-PLC-DCS-001", project: "Eastside Manufacturing Plant", type: "DCS", status: "ARCHIVED", statusColor: "orange", lastModified: "3/02/2026" },
   ],
-  "template-datacenter": [
+  "template-datacenter-aws": [
     { id: "dc-asset-1", name: "Chiller Unit 1", code: "23-GEN-CHL-001", project: "CloudFirst Data Center", type: "Chiller Units", status: "Installed", statusColor: "blue", lastModified: "3/11/2026" },
     { id: "dc-asset-2", name: "Cooling Tower A", code: "23-GEN-CTW-001", project: "CloudFirst Data Center", type: "Cooling Towers", status: "Approved", statusColor: "green", lastModified: "3/10/2026" },
-    { id: "dc-asset-3", name: "Heat Exchanger - Primary", code: "23-GEN-HEX-001", project: "SecureVault Colocation", type: "Heat Exchangers", status: "Commissioned", statusColor: "teal", lastModified: "3/09/2026" },
-    { id: "dc-asset-4", name: "CRAC Unit - Hall A", code: "23-AIR-CRC-001", project: "SecureVault Colocation", type: "CRAC Units", status: "Installed", statusColor: "blue", lastModified: "3/08/2026" },
-    { id: "dc-asset-5", name: "CRAH Unit - Hall B", code: "23-AIR-CRH-001", project: "Enterprise Compute Facility", type: "CRAH Units", status: "IN-DESIGN", statusColor: "gray", lastModified: "3/07/2026" },
-    { id: "dc-asset-6", name: "In-Row Cooling Unit 1", code: "23-AIR-IRC-001", project: "Enterprise Compute Facility", type: "In-Row Cooling", status: "In-Warehouse", statusColor: "blue", lastModified: "3/06/2026" },
     { id: "dc-asset-7", name: "Chilled Water Pump 1", code: "23-PMP-CWP-001", project: "CloudFirst Data Center", type: "Chilled Water Pumps", status: "Approved", statusColor: "green", lastModified: "3/05/2026" },
     { id: "dc-asset-8", name: "PDU - Row A", code: "26-PWR-PDU-001", project: "CloudFirst Data Center", type: "PDUs", status: "Installed", statusColor: "blue", lastModified: "3/04/2026" },
+  ],
+  "template-datacenter-meta": [
+    { id: "dc-asset-3", name: "Heat Exchanger - Primary", code: "23-GEN-HEX-001", project: "SecureVault Colocation", type: "Heat Exchangers", status: "Commissioned", statusColor: "teal", lastModified: "3/09/2026" },
+    { id: "dc-asset-4", name: "CRAC Unit - Hall A", code: "23-AIR-CRC-001", project: "SecureVault Colocation", type: "CRAC Units", status: "Installed", statusColor: "blue", lastModified: "3/08/2026" },
     { id: "dc-asset-9", name: "Modular UPS System", code: "26-UPS-MOD-001", project: "SecureVault Colocation", type: "Modular UPS", status: "IN-REVIEW", statusColor: "yellow", lastModified: "3/03/2026" },
+  ],
+  "template-datacenter-oracle": [
+    { id: "dc-asset-5", name: "CRAH Unit - Hall B", code: "23-AIR-CRH-001", project: "Enterprise Compute Facility", type: "CRAH Units", status: "IN-DESIGN", statusColor: "gray", lastModified: "3/07/2026" },
+    { id: "dc-asset-6", name: "In-Row Cooling Unit 1", code: "23-AIR-IRC-001", project: "Enterprise Compute Facility", type: "In-Row Cooling", status: "In-Warehouse", statusColor: "blue", lastModified: "3/06/2026" },
     { id: "dc-asset-10", name: "Diesel Generator - Primary", code: "26-GEN-DSL-001", project: "Enterprise Compute Facility", type: "Diesel Generators", status: "Commissioned", statusColor: "teal", lastModified: "3/02/2026" },
   ],
   "template-windfarm": [

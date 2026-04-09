@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, type SetStateAction } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { ArrowLeft, Search, Plus, Upload, Settings, Copy, Download } from "lucide-react"
+import { ArrowLeft, Search, Plus, Upload, Settings, Download, FolderInput } from "lucide-react"
 import type { AssetType, FieldsetData } from "@/app/page"
 import { AssetTypesTable } from "@/components/asset-types-table"
 import { AssetTypeSheet } from "@/components/asset-type-sheet"
@@ -12,7 +12,7 @@ import {
   type HierarchyItem,
   type Fieldset,
 } from "@/components/bulk-create-dialog"
-import { CustomFieldMappingTable, EXISTING_CUSTOM_FIELDS, type CustomFieldMapping } from "@/components/custom-field-mapping"
+import { EXISTING_CUSTOM_FIELDS, type CustomFieldMapping } from "@/components/custom-field-mapping"
 import {
   findImportedCustomFieldTypeRaw,
   isCsvCustomFieldTypeTokenName,
@@ -21,9 +21,20 @@ import {
 import { buildDeepHierarchyClassificationCsv } from "@/lib/export-deep-hierarchy-csv"
 import type { AssetTemplate } from "@/components/asset-templates-table"
 import {
-  CopyFromTemplateDialog,
-  type CopyFromApplyPayload,
-} from "@/components/copy-from-template-dialog"
+  ImportFromTemplateDialog,
+  type ImportFromApplyPayload,
+} from "@/components/import-from-template-dialog"
+import {
+  buildMultiClientFieldsetDisplayName,
+  FIELDSET_DISPLAY_PRIMARY_CLIENT,
+} from "@/lib/fieldset-display-names"
+import { GlobalAssetSettings } from "@/components/global-asset-settings"
+import { COPY_SOURCE_COMPANY_CATALOG_ID } from "@/lib/copy-template-sources"
+import {
+  ALL_CATALOG_FIELDSET_CLIENTS,
+  mergeFieldsetsMapsForFlatDisplay,
+  syncFlatFieldsetsFromPrimaryClient,
+} from "@/lib/build-multi-hierarchy-global-catalog"
 
 // Default fieldsets that are always available
 const DEFAULT_FIELDSETS: Record<string, FieldsetData> = {
@@ -41,6 +52,41 @@ const DEFAULT_FIELDSETS: Record<string, FieldsetData> = {
     ]
   }
 }
+
+/** Shared DC hierarchy for AWS / Meta / Oracle templates (display names align with multi-client fieldsets). */
+const TEMPLATE_DATACENTER_ASSET_TYPES: AssetType[] = [
+  { id: "dc-23", name: "Mechanical & HVAC", code: "23", description: "Cooling and air handling systems", fieldset: "23_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
+  { id: "dc-23-gen", name: "Cooling Generation", code: "23-GEN", description: "Chilled water and cooling systems", fieldset: "23-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-23", hasSubtypes: true },
+  {
+    id: "dc-23-gen-chl",
+    name: "Chiller Units",
+    code: "23-GEN-CHL",
+    description: "Centralized cooling source for the facility",
+    fieldset: "23-GEN_Fieldset",
+    fieldsetCandidates: ["23-GEN_Fieldset", "23-AIR_Fieldset", "23-PMP_Fieldset"],
+    statusGroup: "Procore Default",
+    parentId: "dc-23-gen",
+  },
+  { id: "dc-23-gen-ctw", name: "Cooling Towers", code: "23-GEN-CTW", description: "Heat rejection systems for water-cooled chillers", fieldset: "23-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-gen" },
+  { id: "dc-23-gen-hex", name: "Heat Exchangers", code: "23-GEN-HEX", description: "Plates used for fluid-to-fluid thermal transfer", fieldset: "23-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-gen" },
+  { id: "dc-23-air", name: "Air Handling & Room Cooling", code: "23-AIR", description: "Computer room cooling", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23", hasSubtypes: true },
+  { id: "dc-23-air-crc", name: "CRAC Units", code: "23-AIR-CRC", description: "DX-based Computer Room Air Conditioning", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-air" },
+  { id: "dc-23-air-crh", name: "CRAH Units", code: "23-AIR-CRH", description: "Chilled Water-based Computer Room Air Handlers", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-air" },
+  { id: "dc-23-air-irc", name: "In-Row Cooling", code: "23-AIR-IRC", description: "Cooling units placed between server racks", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-air" },
+  { id: "dc-23-pmp", name: "Fluid Distribution", code: "23-PMP", description: "Pumps and valves", fieldset: "23-PMP_Fieldset", statusGroup: "Procore Default", parentId: "dc-23", hasSubtypes: true },
+  { id: "dc-23-pmp-cwp", name: "Chilled Water Pumps", code: "23-PMP-CWP", description: "Pumps circulating water to cooling units", fieldset: "23-PMP_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-pmp" },
+  { id: "dc-23-pmp-vlv", name: "Control Valves", code: "23-PMP-VLV", description: "Motorized valves for flow and pressure regulation", fieldset: "23-PMP_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-pmp" },
+  { id: "dc-26", name: "Electrical Systems", code: "26", description: "Power distribution and UPS", fieldset: "26_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
+  { id: "dc-26-pwr", name: "Power Distribution", code: "26-PWR", description: "Critical power distribution", fieldset: "26-PWR_Fieldset", statusGroup: "Procore Default", parentId: "dc-26", hasSubtypes: true },
+  { id: "dc-26-pwr-pdu", name: "PDUs", code: "26-PWR-PDU", description: "Power distribution units", fieldset: "26-PWR_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-pwr" },
+  { id: "dc-26-pwr-sts", name: "Static Transfer Switches", code: "26-PWR-STS", description: "Automatic transfer switches", fieldset: "26-PWR_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-pwr" },
+  { id: "dc-26-ups", name: "UPS Systems", code: "26-UPS", description: "Uninterruptible power supply", fieldset: "26-UPS_Fieldset", statusGroup: "Procore Default", parentId: "dc-26", hasSubtypes: true },
+  { id: "dc-26-ups-mod", name: "Modular UPS", code: "26-UPS-MOD", description: "Scalable modular UPS systems", fieldset: "26-UPS_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-ups" },
+  { id: "dc-26-ups-bat", name: "Battery Systems", code: "26-UPS-BAT", description: "UPS battery banks", fieldset: "26-UPS_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-ups" },
+  { id: "dc-26-gen", name: "Emergency Power", code: "26-GEN", description: "Backup generators", fieldset: "26-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-26", hasSubtypes: true },
+  { id: "dc-26-gen-dsl", name: "Diesel Generators", code: "26-GEN-DSL", description: "Primary backup power generation", fieldset: "26-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-gen" },
+  { id: "dc-26-gen-ats", name: "ATS", code: "26-GEN-ATS", description: "Automatic transfer switches", fieldset: "26-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-gen" },
+]
 
 // Pre-populated asset types for each template
 const TEMPLATE_ASSET_TYPES: Record<string, AssetType[]> = {
@@ -66,6 +112,10 @@ const TEMPLATE_ASSET_TYPES: Record<string, AssetType[]> = {
     { id: "res-28-fir", name: "Fire Protection", code: "28-FIR", description: "Fire suppression and detection", fieldset: "28-FIR_Fieldset", statusGroup: "Procore Default", parentId: "res-28", hasSubtypes: true },
     { id: "res-28-fir-spr", name: "Sprinkler Systems", code: "28-FIR-SPR", description: "Fire suppression sprinklers", fieldset: "28-FIR_Fieldset", statusGroup: "Procore Default", parentId: "res-28-fir" },
     { id: "res-28-fir-alm", name: "Fire Alarms", code: "28-FIR-ALM", description: "Detection and alarm systems", fieldset: "28-FIR_Fieldset", statusGroup: "Procore Default", parentId: "res-28-fir" },
+    { id: "res-14", name: "Vertical Transportation", code: "14", description: "Elevators and lifts for residents, service, and accessibility", fieldset: "14_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
+    { id: "res-14-elv", name: "Elevators", code: "14-ELV", description: "Passenger, service, and MRL / hydraulic units", fieldset: "14-ELV_Fieldset", statusGroup: "Procore Default", parentId: "res-14", hasSubtypes: true },
+    { id: "res-14-elv-psg", name: "Passenger Elevators", code: "14-ELV-PSG", description: "Resident and visitor cars", fieldset: "14-ELV_Fieldset", statusGroup: "Procore Default", parentId: "res-14-elv" },
+    { id: "res-14-elv-svc", name: "Service & Freight Elevators", code: "14-ELV-SVC", description: "Moving, trash, and equipment lifts", fieldset: "14-ELV_Fieldset", statusGroup: "Procore Default", parentId: "res-14-elv" },
   ],
   "template-commercial": [
     { id: "com-01", name: "Site Infrastructure", code: "01", description: "Site systems and security", fieldset: "01_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
@@ -111,6 +161,10 @@ const TEMPLATE_ASSET_TYPES: Record<string, AssetType[]> = {
     { id: "hc-28-nrs", name: "Nurse Call", code: "28-NRS", description: "Patient communication systems", fieldset: "28-NRS_Fieldset", statusGroup: "Procore Default", parentId: "hc-28", hasSubtypes: true },
     { id: "hc-28-nrs-std", name: "Nurse Call Stations", code: "28-NRS-STD", description: "Patient call systems", fieldset: "28-NRS_Fieldset", statusGroup: "Procore Default", parentId: "hc-28-nrs" },
     { id: "hc-28-nrs-cod", name: "Code Blue", code: "28-NRS-COD", description: "Emergency alert systems", fieldset: "28-NRS_Fieldset", statusGroup: "Procore Default", parentId: "hc-28-nrs" },
+    { id: "hc-14", name: "Vertical Transportation", code: "14", description: "Patient, visitor, staff, and material vertical circulation", fieldset: "14_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
+    { id: "hc-14-elv", name: "Elevators", code: "14-ELV", description: "IGBC / stretcher-compliant and public lifts", fieldset: "14-ELV_Fieldset", statusGroup: "Procore Default", parentId: "hc-14", hasSubtypes: true },
+    { id: "hc-14-elv-pat", name: "Patient / Bed Elevators", code: "14-ELV-PAT", description: "Stretcher-capacity cars and emergency power interface", fieldset: "14-ELV_Fieldset", statusGroup: "Procore Default", parentId: "hc-14-elv" },
+    { id: "hc-14-elv-pub", name: "Public & Visitor Elevators", code: "14-ELV-PUB", description: "Lobbies, parking, and inter-building links", fieldset: "14-ELV_Fieldset", statusGroup: "Procore Default", parentId: "hc-14-elv" },
   ],
   "template-industrial": [
     { id: "ind-11", name: "Process Equipment", code: "11", description: "Production and storage equipment", fieldset: "11_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
@@ -135,30 +189,9 @@ const TEMPLATE_ASSET_TYPES: Record<string, AssetType[]> = {
     { id: "ind-40-plc-dcs", name: "DCS", code: "40-PLC-DCS", description: "Distributed control systems", fieldset: "40-PLC_Fieldset", statusGroup: "Procore Default", parentId: "ind-40-plc" },
     { id: "ind-40-plc-hmi", name: "HMI", code: "40-PLC-HMI", description: "Human machine interfaces", fieldset: "40-PLC_Fieldset", statusGroup: "Procore Default", parentId: "ind-40-plc" },
   ],
-  "template-datacenter": [
-    { id: "dc-23", name: "Mechanical & HVAC", code: "23", description: "Cooling and air handling systems", fieldset: "23_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
-    { id: "dc-23-gen", name: "Cooling Generation", code: "23-GEN", description: "Chilled water and cooling systems", fieldset: "23-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-23", hasSubtypes: true },
-    { id: "dc-23-gen-chl", name: "Chiller Units", code: "23-GEN-CHL", description: "Centralized cooling source for the facility", fieldset: "23-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-gen" },
-    { id: "dc-23-gen-ctw", name: "Cooling Towers", code: "23-GEN-CTW", description: "Heat rejection systems for water-cooled chillers", fieldset: "23-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-gen" },
-    { id: "dc-23-gen-hex", name: "Heat Exchangers", code: "23-GEN-HEX", description: "Plates used for fluid-to-fluid thermal transfer", fieldset: "23-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-gen" },
-    { id: "dc-23-air", name: "Air Handling & Room Cooling", code: "23-AIR", description: "Computer room cooling", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23", hasSubtypes: true },
-    { id: "dc-23-air-crc", name: "CRAC Units", code: "23-AIR-CRC", description: "DX-based Computer Room Air Conditioning", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-air" },
-    { id: "dc-23-air-crh", name: "CRAH Units", code: "23-AIR-CRH", description: "Chilled Water-based Computer Room Air Handlers", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-air" },
-    { id: "dc-23-air-irc", name: "In-Row Cooling", code: "23-AIR-IRC", description: "Cooling units placed between server racks", fieldset: "23-AIR_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-air" },
-    { id: "dc-23-pmp", name: "Fluid Distribution", code: "23-PMP", description: "Pumps and valves", fieldset: "23-PMP_Fieldset", statusGroup: "Procore Default", parentId: "dc-23", hasSubtypes: true },
-    { id: "dc-23-pmp-cwp", name: "Chilled Water Pumps", code: "23-PMP-CWP", description: "Pumps circulating water to cooling units", fieldset: "23-PMP_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-pmp" },
-    { id: "dc-23-pmp-vlv", name: "Control Valves", code: "23-PMP-VLV", description: "Motorized valves for flow and pressure regulation", fieldset: "23-PMP_Fieldset", statusGroup: "Procore Default", parentId: "dc-23-pmp" },
-    { id: "dc-26", name: "Electrical Systems", code: "26", description: "Power distribution and UPS", fieldset: "26_Fieldset", statusGroup: "Procore Default", hasSubtypes: true },
-    { id: "dc-26-pwr", name: "Power Distribution", code: "26-PWR", description: "Critical power distribution", fieldset: "26-PWR_Fieldset", statusGroup: "Procore Default", parentId: "dc-26", hasSubtypes: true },
-    { id: "dc-26-pwr-pdu", name: "PDUs", code: "26-PWR-PDU", description: "Power distribution units", fieldset: "26-PWR_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-pwr" },
-    { id: "dc-26-pwr-sts", name: "Static Transfer Switches", code: "26-PWR-STS", description: "Automatic transfer switches", fieldset: "26-PWR_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-pwr" },
-    { id: "dc-26-ups", name: "UPS Systems", code: "26-UPS", description: "Uninterruptible power supply", fieldset: "26-UPS_Fieldset", statusGroup: "Procore Default", parentId: "dc-26", hasSubtypes: true },
-    { id: "dc-26-ups-mod", name: "Modular UPS", code: "26-UPS-MOD", description: "Scalable modular UPS systems", fieldset: "26-UPS_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-ups" },
-    { id: "dc-26-ups-bat", name: "Battery Systems", code: "26-UPS-BAT", description: "UPS battery banks", fieldset: "26-UPS_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-ups" },
-    { id: "dc-26-gen", name: "Emergency Power", code: "26-GEN", description: "Backup generators", fieldset: "26-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-26", hasSubtypes: true },
-    { id: "dc-26-gen-dsl", name: "Diesel Generators", code: "26-GEN-DSL", description: "Primary backup power generation", fieldset: "26-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-gen" },
-    { id: "dc-26-gen-ats", name: "ATS", code: "26-GEN-ATS", description: "Automatic transfer switches", fieldset: "26-GEN_Fieldset", statusGroup: "Procore Default", parentId: "dc-26-gen" },
-  ],
+  "template-datacenter-aws": TEMPLATE_DATACENTER_ASSET_TYPES,
+  "template-datacenter-meta": TEMPLATE_DATACENTER_ASSET_TYPES,
+  "template-datacenter-oracle": TEMPLATE_DATACENTER_ASSET_TYPES,
   "template-windfarm": [
     {
       id: "wf-01",
@@ -648,6 +681,42 @@ const TEMPLATE_ASSET_TYPES: Record<string, AssetType[]> = {
       parentId: "ap-02",
     },
     {
+      id: "ap-07",
+      name: "NAVAIDS & Weather Systems",
+      code: "AP-07",
+      description: "ILS, approach aids, DME/TACAN, and AWOS / windshear sensors per FAA orders",
+      fieldset: "AP_NAV_Fieldset",
+      statusGroup: "Procore Default",
+      hasSubtypes: true,
+    },
+    {
+      id: "ap-07-ils",
+      name: "ILS / Localizer & Glideslope",
+      code: "AP-07-ILS",
+      description: "Localizer, glide path, marker beacons, and critical area monitoring",
+      fieldset: "AP_NAV_Fieldset",
+      statusGroup: "Procore Default",
+      parentId: "ap-07",
+    },
+    {
+      id: "ap-07-dme",
+      name: "DME / TACAN & Approach Aids",
+      code: "AP-07-DME",
+      description: "Distance equipment, VOR co-sited aids, and RNAV ground infrastructure",
+      fieldset: "AP_NAV_Fieldset",
+      statusGroup: "Procore Default",
+      parentId: "ap-07",
+    },
+    {
+      id: "ap-07-met",
+      name: "AWOS / ASOS & Windshear",
+      code: "AP-07-MET",
+      description: "Automated weather, LLWAS / TDWR interfaces, and RVR sensors",
+      fieldset: "AP_NAV_Fieldset",
+      statusGroup: "Procore Default",
+      parentId: "ap-07",
+    },
+    {
       id: "ap-03",
       name: "Baggage Handling",
       code: "AP-03",
@@ -758,6 +827,72 @@ const TEMPLATE_ASSET_TYPES: Record<string, AssetType[]> = {
   ],
 }
 
+const TEMPLATE_FIELDSETS_DATACENTER: Record<string, FieldsetData> = {
+  ...DEFAULT_FIELDSETS,
+  "23_Fieldset": {
+    name: "23_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
+    ]
+  },
+  "23-GEN_Fieldset": {
+    name: "23-GEN_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
+      { name: "Technical Details", fields: ["Fluid Type (Glycol/Water)", "Max Working Pressure", "Dry/Wet Weight"] },
+    ]
+  },
+  "23-AIR_Fieldset": {
+    name: "23-AIR_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Cooling Data", fields: ["Cooling Capacity (kW)", "Airflow (CFM)", "Supply Air Temp"] },
+      { name: "Operational", fields: ["Redundancy Level", "ASHRAE Compliance", "Monitoring Integration"] },
+    ]
+  },
+  "23-PMP_Fieldset": {
+    name: "23-PMP_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Pump Data", fields: ["Flow Rate (GPM)", "Head Pressure (ft)", "Motor HP"] },
+      { name: "Control", fields: ["VFD Controlled", "Redundancy Configuration", "Alarm Set Points"] },
+    ]
+  },
+  "26_Fieldset": {
+    name: "26_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
+    ]
+  },
+  "26-PWR_Fieldset": {
+    name: "26-PWR_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
+      { name: "Distribution Details", fields: ["Number of Circuits", "Load Capacity (kW)", "Metering Integration"] },
+    ]
+  },
+  "26-UPS_Fieldset": {
+    name: "26-UPS_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "UPS Specifications", fields: ["Capacity (kVA)", "Runtime (Minutes)", "Efficiency Rating"] },
+      { name: "Battery Details", fields: ["Battery Type", "String Count", "Expected Life (Years)"] },
+    ]
+  },
+  "26-GEN_Fieldset": {
+    name: "26-GEN_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Generator Specifications", fields: ["Capacity (kW)", "Voltage Output", "Fuel Type"] },
+      { name: "Operational Details", fields: ["Fuel Tank Capacity", "Load Bank Test Date", "Runtime Hours"] },
+    ]
+  },
+}
+
 // Pre-populated fieldsets for each template
 const TEMPLATE_FIELDSETS: Record<string, Record<string, FieldsetData>> = {
   "template-default": {
@@ -830,6 +965,21 @@ const TEMPLATE_FIELDSETS: Record<string, Record<string, FieldsetData>> = {
         { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
         { name: "Safety Details", fields: ["Inspection Due Date", "Code Compliance", "Testing Schedule"] },
         { name: "System Details", fields: ["Coverage Area (sq ft)", "Flow Rate (GPM)", "Alarm Integration"] },
+      ]
+    },
+    "14_Fieldset": {
+      name: "14_Fieldset",
+      sections: [
+        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+        { name: "Technical Specifications", fields: ["Load Capacity (lbs)", "Speed (FPM)", "Number of Stops"] },
+      ]
+    },
+    "14-ELV_Fieldset": {
+      name: "14-ELV_Fieldset",
+      sections: [
+        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+        { name: "Technical Specifications", fields: ["Load Capacity (lbs)", "Speed (FPM)", "Number of Stops"] },
+        { name: "Equipment Details", fields: ["Controller Type", "Motor Type", "Door Operator"] },
       ]
     },
   },
@@ -987,6 +1137,21 @@ const TEMPLATE_FIELDSETS: Record<string, Record<string, FieldsetData>> = {
         { name: "System Configuration", fields: ["Zone Assignment", "Response Protocol", "Integration Status"] },
       ]
     },
+    "14_Fieldset": {
+      name: "14_Fieldset",
+      sections: [
+        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+        { name: "Code & Accessibility", fields: ["Stretcher Compliance (IGBC)", "Firefighters’ Service", "Seismic / OSHPD Tier"] },
+      ]
+    },
+    "14-ELV_Fieldset": {
+      name: "14-ELV_Fieldset",
+      sections: [
+        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+        { name: "Code & Accessibility", fields: ["Stretcher Compliance (IGBC)", "Firefighters’ Service", "Seismic / OSHPD Tier"] },
+        { name: "Clinical Circulation", fields: ["Car Size (in)", "Door Hold / Card Reader", "Emergency Power Bus"] },
+      ]
+    },
   },
   "template-industrial": {
     ...DEFAULT_FIELDSETS,
@@ -1066,71 +1231,9 @@ const TEMPLATE_FIELDSETS: Record<string, Record<string, FieldsetData>> = {
       ]
     },
   },
-  "template-datacenter": {
-    ...DEFAULT_FIELDSETS,
-    "23_Fieldset": {
-      name: "23_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
-      ]
-    },
-    "23-GEN_Fieldset": {
-      name: "23-GEN_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
-        { name: "Technical Details", fields: ["Fluid Type (Glycol/Water)", "Max Working Pressure", "Dry/Wet Weight"] },
-      ]
-    },
-    "23-AIR_Fieldset": {
-      name: "23-AIR_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Cooling Data", fields: ["Cooling Capacity (kW)", "Airflow (CFM)", "Supply Air Temp"] },
-        { name: "Operational", fields: ["Redundancy Level", "ASHRAE Compliance", "Monitoring Integration"] },
-      ]
-    },
-    "23-PMP_Fieldset": {
-      name: "23-PMP_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Pump Data", fields: ["Flow Rate (GPM)", "Head Pressure (ft)", "Motor HP"] },
-        { name: "Control", fields: ["VFD Controlled", "Redundancy Configuration", "Alarm Set Points"] },
-      ]
-    },
-    "26_Fieldset": {
-      name: "26_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
-      ]
-    },
-    "26-PWR_Fieldset": {
-      name: "26-PWR_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
-        { name: "Distribution Details", fields: ["Number of Circuits", "Load Capacity (kW)", "Metering Integration"] },
-      ]
-    },
-    "26-UPS_Fieldset": {
-      name: "26-UPS_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "UPS Specifications", fields: ["Capacity (kVA)", "Runtime (Minutes)", "Efficiency Rating"] },
-        { name: "Battery Details", fields: ["Battery Type", "String Count", "Expected Life (Years)"] },
-      ]
-    },
-    "26-GEN_Fieldset": {
-      name: "26-GEN_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Generator Specifications", fields: ["Capacity (kW)", "Voltage Output", "Fuel Type"] },
-        { name: "Operational Details", fields: ["Fuel Tank Capacity", "Load Bank Test Date", "Runtime Hours"] },
-      ]
-    },
-  },
+  "template-datacenter-aws": TEMPLATE_FIELDSETS_DATACENTER,
+  "template-datacenter-meta": TEMPLATE_FIELDSETS_DATACENTER,
+  "template-datacenter-oracle": TEMPLATE_FIELDSETS_DATACENTER,
   "template-windfarm": {
     ...DEFAULT_FIELDSETS,
     "WF_TURB_Fieldset": {
@@ -1515,6 +1618,31 @@ const TEMPLATE_FIELDSETS: Record<string, Record<string, FieldsetData>> = {
         },
       ],
     },
+    "AP_NAV_Fieldset": {
+      name: "AP_NAV_Fieldset",
+      sections: [
+        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+        {
+          name: "FAA Nav Aid",
+          fields: [
+            "Facility ID / Designator",
+            "Frequency (MHz)",
+            "Monitor / Remote Status",
+            "Flight Check Due Date",
+            "Critical Area / ILS SSM Integration",
+          ],
+        },
+        {
+          name: "Sustainment",
+          fields: [
+            "OEM / Maintainer Contract",
+            "Spares Kit Ref",
+            "Last FAR Part 171 Inspection",
+            "NOTAM Coordination Contact",
+          ],
+        },
+      ],
+    },
     "AP_BHS_Fieldset": {
       name: "AP_BHS_Fieldset",
       sections: [
@@ -1633,11 +1761,43 @@ export function getTemplateSourceData(templateId: string): {
   const rawFs = TEMPLATE_FIELDSETS[templateId] ?? DEFAULT_FIELDSETS
   const assetTypes: AssetType[] = JSON.parse(JSON.stringify(rawTypes))
   const fieldsets: Record<string, FieldsetData> = JSON.parse(JSON.stringify(rawFs))
+  for (const key of Object.keys(fieldsets)) {
+    const fd = fieldsets[key]
+    if (fd) {
+      const namingKey =
+        templateId === "template-healthcare" && key.startsWith("11") && !key.includes("IMG")
+          ? `HOSP_${key}`
+          : key
+      fd.name = buildMultiClientFieldsetDisplayName(namingKey, FIELDSET_DISPLAY_PRIMARY_CLIENT)
+    }
+  }
   return { assetTypes, fieldsets }
 }
 
+export type TemplateAssetConfig = {
+  assetTypes: AssetType[]
+  fieldsets: Record<string, FieldsetData>
+  /**
+   * Same asset types and fieldset **keys** for every client; each client has its own `FieldsetData` (labels, sections).
+   * When absent, only `fieldsets` applies.
+   */
+  fieldsetsByClient?: Record<string, Record<string, FieldsetData>>
+  /**
+   * Company level asset settings: project id → fieldset object key. Omitted ids use **Procore Default**.
+   */
+  projectFieldsetKeys?: Record<string, string>
+  /**
+   * Company level: fieldset object key → template ids that reference this fieldset in catalog admin.
+   */
+  fieldsetTemplateAssignments?: Record<string, string[]>
+  /**
+   * Company level: asset type id → template ids that reference this type in catalog admin.
+   */
+  assetTypeTemplateAssignments?: Record<string, string[]>
+}
+
 /** New stable ids for copied hierarchy (parentId remapped). */
-function remapAssetTypesWithNewIds(types: AssetType[]): AssetType[] {
+export function remapAssetTypesWithNewIds(types: AssetType[]): AssetType[] {
   if (types.length === 0) return []
   const idMap = new Map<string, string>()
   const prefix = `cf-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -1659,7 +1819,8 @@ function filterAssetTypesWithAncestors(all: AssetType[], selectedIds: Set<string
     let cur: AssetType | undefined = all.find((a) => a.id === id)
     while (cur) {
       include.add(cur.id)
-      cur = cur.parentId ? all.find((a) => a.id === cur.parentId) : undefined
+      const pid = cur.parentId
+      cur = pid ? all.find((a) => a.id === pid) : undefined
     }
   }
   return all.filter((a) => include.has(a.id))
@@ -1683,6 +1844,31 @@ function pickFieldsetsByKeys(
     if (keys.has(k)) {
       out[k] = JSON.parse(JSON.stringify(src[k])) as FieldsetData
     }
+  }
+  return out
+}
+
+function pickFieldsetsByKeysForAllClients(
+  byClient: Record<string, Record<string, FieldsetData>>,
+  keys: Set<string>,
+  clients: readonly string[]
+): Record<string, Record<string, FieldsetData>> {
+  const out: Record<string, Record<string, FieldsetData>> = {}
+  for (const c of clients) {
+    out[c] = pickFieldsetsByKeys(byClient[c] ?? {}, keys)
+  }
+  return out
+}
+
+/** Source project → fieldset key rows where the key is part of this import. */
+function pickProjectFieldsetKeysForImportedFieldsets(
+  src: Record<string, string> | undefined,
+  importedFieldsetKeys: Set<string>
+): Record<string, string> {
+  if (!src) return {}
+  const out: Record<string, string> = {}
+  for (const [projectId, key] of Object.entries(src)) {
+    if (importedFieldsetKeys.has(key)) out[projectId] = key
   }
   return out
 }
@@ -1757,6 +1943,18 @@ function mergeFieldsetRecords(
   return out
 }
 
+function mergeFieldsetsByClientMaps(
+  prev: Record<string, Record<string, FieldsetData>> | undefined,
+  incoming: Record<string, Record<string, FieldsetData>>,
+  clients: readonly string[]
+): Record<string, Record<string, FieldsetData>> {
+  const out: Record<string, Record<string, FieldsetData>> = {}
+  for (const c of clients) {
+    out[c] = mergeFieldsetRecords(prev?.[c] ?? {}, incoming[c] ?? {})
+  }
+  return out
+}
+
 interface AssetTemplateDetailProps {
   template: AssetTemplate
   /** All templates (for Copy from source picker). */
@@ -1764,6 +1962,15 @@ interface AssetTemplateDetailProps {
   onBack: () => void
   onSave: (template: AssetTemplate) => void
   mode: "edit" | "view"
+  templateConfig: TemplateAssetConfig
+  onTemplateConfigChange: (updater: (prev: TemplateAssetConfig) => TemplateAssetConfig) => void
+  resolveTemplateConfig: (templateId: string) => TemplateAssetConfig
+  /**
+   * When true, asset types and fieldset-changing flows are view-only; manage them under Asset settings.
+   */
+  catalogReadOnly?: boolean
+  /** Company catalog (assignments determine which types/fieldsets appear when `catalogReadOnly`). */
+  globalCatalog?: TemplateAssetConfig
 }
 
 export function AssetTemplateDetail({
@@ -1772,31 +1979,44 @@ export function AssetTemplateDetail({
   onBack,
   onSave,
   mode,
+  templateConfig,
+  onTemplateConfigChange,
+  resolveTemplateConfig,
+  catalogReadOnly = false,
+  globalCatalog,
 }: AssetTemplateDetailProps) {
-  const [activeTab, setActiveTab] = useState("types")
   const [searchQuery, setSearchQuery] = useState("")
-  
-  // Get pre-populated data based on template ID
-  const initialAssetTypes = TEMPLATE_ASSET_TYPES[template.id] || []
-  const initialFieldsets = TEMPLATE_FIELDSETS[template.id] || DEFAULT_FIELDSETS
-  
-  // Asset types state (per template)
-  const [assetTypes, setAssetTypes] = useState<AssetType[]>(initialAssetTypes)
+
+  const { assetTypes, fieldsets } = templateConfig
+  /** One shared type tree; show AWS fieldset labels by default when per-client maps exist. */
+  /** Merged flat map already unions all clients; use it when present. */
+  const fieldsetsForUi = fieldsets
+
+  const setAssetTypes = useCallback(
+    (action: SetStateAction<AssetType[]>) => {
+      onTemplateConfigChange((prev) => ({
+        ...prev,
+        assetTypes: typeof action === "function" ? action(prev.assetTypes) : action,
+      }))
+    },
+    [onTemplateConfigChange]
+  )
+
+  const setFieldsets = useCallback(
+    (action: SetStateAction<Record<string, FieldsetData>>) => {
+      onTemplateConfigChange((prev) => ({
+        ...prev,
+        fieldsets: typeof action === "function" ? action(prev.fieldsets) : action,
+      }))
+    },
+    [onTemplateConfigChange]
+  )
+
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editingAsset, setEditingAsset] = useState<AssetType | null>(null)
   const [bulkCreateOpen, setBulkCreateOpen] = useState(false)
-  const [copyFromOpen, setCopyFromOpen] = useState(false)
-  const [fieldsets, setFieldsets] = useState<Record<string, FieldsetData>>(initialFieldsets)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [customFieldMappings, setCustomFieldMappings] = useState<CustomFieldMapping[]>([])
-
-  const tabs = [
-    { id: "types", label: "Types" },
-    { id: "fieldsets", label: "Fieldsets" },
-    { id: "custom-fields", label: "Custom Fields" },
-    { id: "custom-field-mapping", label: "Custom Field Mapping" },
-    { id: "default-fields", label: "Default Fields" },
-    { id: "status-groups", label: "Status Groups" },
-  ]
 
   const filteredAssetTypes = assetTypes.filter(
     (asset) =>
@@ -1808,7 +2028,7 @@ export function AssetTemplateDetail({
   const handleExportDeepHierarchyCsv = () => {
     const csv = buildDeepHierarchyClassificationCsv({
       assetTypes,
-      fieldsets,
+      fieldsets: fieldsetsForUi,
       customFieldMappings,
     })
     const normalized = csv.replace(/^\uFEFF/, "")
@@ -1977,7 +2197,7 @@ export function AssetTemplateDetail({
             : [{ name: "Fields", fields: [] }],
     }))
 
-    // Collect parent-level fieldsets so both parent and child nodes get a fieldset with all relevant fields
+    // Parent rows: sections used only to cascade into leaf fieldsets (no separate FieldsetData per parent).
     const parentFieldsetDefs: ParsedFieldsetWithSections[] = []
     function collectFieldsUnder(node: HierarchyItem): string[] {
       if (node.fieldsetCode) {
@@ -2004,7 +2224,7 @@ export function AssetTemplateDetail({
           parentFieldsetDefs.push({
             code: item.code,
             name: item.name,
-            sections: [{ name: "Default", fields: [...item.commonFields] }]
+            sections: [{ name: "Default", fields: [...(item.commonFields ?? [])] }]
           })
         } else if (hasChildren) {
           const allFields = Array.from(new Set(collectFieldsUnder(item)))
@@ -2020,10 +2240,11 @@ export function AssetTemplateDetail({
       })
     }
     walkForParentFieldsets(items)
-    const allFieldsetsForMatch = [...parentFieldsetDefs, ...importedFieldsets]
+    const allDefsForLeafMerge = [...parentFieldsetDefs, ...importedFieldsets]
 
     /**
-     * Each asset type gets `${code}_Fieldset` = Procore Default + each ancestor's imported slice + this type's own imported fields.
+     * Each leaf fieldset key `${code}_Fieldset` = Procore Default + each ancestor's slices + that leaf's own fields.
+     * Only leaf nodes reference these keys; parents stay on Procore Default.
      */
     const buildCombinedFieldsetForCode = (
       ownSections: { name: string; fields: string[] }[],
@@ -2044,8 +2265,8 @@ export function AssetTemplateDetail({
       return { name: fieldsetName, sections: base }
     }
 
-    // Merge leaf + parent fieldsets: default + cascaded ancestors + custom for each type
-    if (fieldsetsFromDialog.length > 0 || parentFieldsetDefs.length > 0) {
+    // Persist fieldset objects only for leaf codes (template/global catalog keeps client-specific copies separately).
+    if (importedFieldsets.length > 0) {
       setFieldsets((prev) => {
         const defaultSections = cloneSections(
           prev["Procore Default"]?.sections ?? DEFAULT_FIELDSETS["Procore Default"].sections
@@ -2055,15 +2276,7 @@ export function AssetTemplateDetail({
           next["Procore Default"] = { ...DEFAULT_FIELDSETS["Procore Default"] }
         }
 
-        const defs = allFieldsetsForMatch
-        // Parents first (shallow to deep) so naming is stable; each build is independent of order
-        const sortedParents = [...parentFieldsetDefs].sort(
-          (a, b) => a.code.split("-").length - b.code.split("-").length
-        )
-        for (const fs of sortedParents) {
-          const fieldsetName = `${fs.code}_Fieldset`
-          next[fieldsetName] = buildCombinedFieldsetForCode(fs.sections, fs.code, defaultSections, defs)
-        }
+        const defs = allDefsForLeafMerge
         for (const fs of importedFieldsets) {
           const fieldsetName = `${fs.code}_Fieldset`
           next[fieldsetName] = buildCombinedFieldsetForCode(fs.sections, fs.code, defaultSections, defs)
@@ -2072,10 +2285,10 @@ export function AssetTemplateDetail({
       })
     }
 
-    const findMatchingFieldset = (code: string): string | null => {
-      const exactMatch = allFieldsetsForMatch.find((fs) => fs.code === code)
+    const findMatchingLeafFieldset = (code: string): string | null => {
+      const exactMatch = importedFieldsets.find((fs) => fs.code === code)
       if (exactMatch) return `${exactMatch.code}_Fieldset`
-      const sortedFieldsets = [...allFieldsetsForMatch].sort((a, b) => b.code.length - a.code.length)
+      const sortedFieldsets = [...importedFieldsets].sort((a, b) => b.code.length - a.code.length)
       for (const fs of sortedFieldsets) {
         if (code.startsWith(fs.code)) return `${fs.code}_Fieldset`
       }
@@ -2083,20 +2296,16 @@ export function AssetTemplateDetail({
     }
 
     if (items.length > 0) {
-      const flattenHierarchy = (
-        nodes: HierarchyItem[],
-        parentId?: string,
-        parentFieldset?: string
-      ): AssetType[] => {
+      const flattenHierarchy = (nodes: HierarchyItem[], parentId?: string): AssetType[] => {
         const result: AssetType[] = []
-        
+
         nodes.forEach((item) => {
-          // Use item.fieldsetCode from parser when present (leaf nodes), else match by code
-          const fieldsetName =
-            (item.fieldsetCode ? `${item.fieldsetCode}_Fieldset` : null) ||
-            findMatchingFieldset(item.code) ||
-            parentFieldset ||
-            "Procore Default"
+          const hasChildren = !!(item.children && item.children.length > 0)
+          const fieldsetName = hasChildren
+            ? "Procore Default"
+            : (item.fieldsetCode ? `${item.fieldsetCode}_Fieldset` : null) ||
+              findMatchingLeafFieldset(item.code) ||
+              "Procore Default"
 
           const assetType: AssetType = {
             id: `bulk-${Date.now()}-${item.code}-${Math.random().toString(36).substr(2, 9)}`,
@@ -2105,14 +2314,14 @@ export function AssetTemplateDetail({
             description: item.description || "",
             fieldset: fieldsetName,
             statusGroup: "Procore Default",
-            hasSubtypes: item.children && item.children.length > 0,
+            hasSubtypes: hasChildren,
             parentId,
           }
 
           result.push(assetType)
 
           if (item.children?.length) {
-            result.push(...flattenHierarchy(item.children, assetType.id, fieldsetName))
+            result.push(...flattenHierarchy(item.children, assetType.id))
           }
         })
 
@@ -2126,7 +2335,7 @@ export function AssetTemplateDetail({
     if (importedFieldsets.length > 0 && items.length === 0) {
       setAssetTypes((prev) => {
         return prev.map((asset) => {
-          const matchingFieldset = findMatchingFieldset(asset.code)
+          const matchingFieldset = findMatchingLeafFieldset(asset.code)
           if (matchingFieldset) {
             return { ...asset, fieldset: matchingFieldset }
           }
@@ -2174,67 +2383,129 @@ export function AssetTemplateDetail({
   }
 
   const getAssetTypesForTemplate = useCallback(
-    (id: string) => getTemplateSourceData(id).assetTypes,
-    []
+    (id: string) => resolveTemplateConfig(id).assetTypes,
+    [resolveTemplateConfig]
   )
 
-  const handleCopyFromApply = (payload: CopyFromApplyPayload) => {
-    const { assetTypes: srcTypes, fieldsets: srcFs } = getTemplateSourceData(
-      payload.sourceTemplateId
-    )
-
-    let typesToCopy: AssetType[] = []
-    if (srcTypes.length > 0) {
-      const sel = new Set(payload.selectedAssetTypeIds)
-      if (sel.size > 0) {
-        typesToCopy = filterAssetTypesWithAncestors(srcTypes, sel)
+  const getFieldsetsForTemplate = useCallback(
+    (id: string) => {
+      const cfg = resolveTemplateConfig(id)
+      if (cfg.fieldsetsByClient && Object.keys(cfg.fieldsetsByClient).length > 0) {
+        return mergeFieldsetsMapsForFlatDisplay(cfg.fieldsetsByClient)
       }
+      return cfg.fieldsets
+    },
+    [resolveTemplateConfig]
+  )
+
+  const handleImportApply = (payload: ImportFromApplyPayload) => {
+    const src = resolveTemplateConfig(payload.sourceTemplateId)
+    const { assetTypes: srcTypes, fieldsets: srcFs, fieldsetsByClient: srcByClient } = src
+    const srcFlat: Record<string, FieldsetData> =
+      srcByClient && Object.keys(srcByClient).length > 0
+        ? mergeFieldsetsMapsForFlatDisplay(srcByClient)
+        : srcFs
+
+    const importTypes = payload.selectedAssetTypeIds.length > 0 && srcTypes.length > 0
+    let typesToCopy: AssetType[] = []
+    if (importTypes) {
+      typesToCopy = filterAssetTypesWithAncestors(srcTypes, new Set(payload.selectedAssetTypeIds))
     }
 
     const remapped = remapAssetTypesWithNewIds(typesToCopy)
-    /** When fieldsets are not copied, types must not keep the source fieldset key (it may be missing locally). */
-    const typesForAppend = payload.copyFieldsets
-      ? remapped
-      : remapped.map((t) => ({ ...t, fieldset: "Procore Default" }))
+    const typesForAppend = importTypes ? remapped : []
 
     const incomingKeys = new Set(typesForAppend.map(assetTypeMatchKey))
 
-    if (payload.copyFieldsets) {
-      let fieldsetsToApply: Record<string, FieldsetData>
-      if (srcTypes.length === 0) {
-        fieldsetsToApply = srcFs
-      } else if (typesToCopy.length < srcTypes.length) {
-        fieldsetsToApply = pickFieldsetsByKeys(srcFs, fieldsetKeysForAssetTypes(typesToCopy))
-      } else {
-        fieldsetsToApply = srcFs
-      }
-      if (payload.mode === "replace") {
-        /** Replace only keys coming from the source; keep other local fieldsets (e.g. Procore Default). */
-        setFieldsets((prev) => {
-          const next = { ...prev }
-          for (const [k, v] of Object.entries(fieldsetsToApply)) {
-            next[k] = JSON.parse(JSON.stringify(v)) as FieldsetData
-          }
-          return next
-        })
-      } else {
-        /** Merge: union sections by name and fields within each section. */
-        setFieldsets((prev) => mergeFieldsetRecords(prev, fieldsetsToApply))
+    let allFieldsetKeys = new Set<string>()
+    if (importTypes && typesToCopy.length > 0) {
+      allFieldsetKeys = fieldsetKeysForAssetTypes(typesToCopy)
+    } else if (!importTypes && payload.selectedFieldsetKeys?.length) {
+      for (const k of payload.selectedFieldsetKeys) {
+        if (Object.prototype.hasOwnProperty.call(srcFlat, k)) allFieldsetKeys.add(k)
       }
     }
 
-    if (srcTypes.length > 0) {
-      setAssetTypes((prev) => {
-        if (payload.mode === "replace") {
-          const withoutReplaced = removeAssetTypesReplacedByIncoming(prev, incomingKeys)
-          return [...withoutReplaced, ...typesForAppend]
-        }
-        /** Merge: skip asset types whose code+name already exist; fieldsets merged above. */
-        const existingKeys = new Set(prev.map(assetTypeMatchKey))
-        const toAdd = typesForAppend.filter((t) => !existingKeys.has(assetTypeMatchKey(t)))
-        return [...prev, ...toAdd]
-      })
+    const incomingProjectKeys = pickProjectFieldsetKeysForImportedFieldsets(
+      src.projectFieldsetKeys,
+      allFieldsetKeys
+    )
+
+    let fieldsetsToApply: Record<string, FieldsetData> = {}
+    let fieldsetsToApplyByClient: Record<string, Record<string, FieldsetData>> | null = null
+    let shouldApplyFieldsets = false
+
+    if (allFieldsetKeys.size > 0) {
+      fieldsetsToApply = pickFieldsetsByKeys(srcFlat, allFieldsetKeys)
+      fieldsetsToApplyByClient = srcByClient
+        ? pickFieldsetsByKeysForAllClients(srcByClient, allFieldsetKeys, ALL_CATALOG_FIELDSET_CLIENTS)
+        : null
+      const pickedByClient = fieldsetsToApplyByClient
+      const hasClientPayload =
+        !!pickedByClient &&
+        ALL_CATALOG_FIELDSET_CLIENTS.some((c) => Object.keys(pickedByClient[c] ?? {}).length > 0)
+      shouldApplyFieldsets = Object.keys(fieldsetsToApply).length > 0 || hasClientPayload
     }
+
+    onTemplateConfigChange((prev) => {
+      let nextFieldsets = prev.fieldsets
+      let nextByClient = prev.fieldsetsByClient
+      let nextAssetTypes = prev.assetTypes
+      let nextProjectFieldsetKeys = prev.projectFieldsetKeys
+
+      if (Object.keys(incomingProjectKeys).length > 0) {
+        nextProjectFieldsetKeys = { ...(prev.projectFieldsetKeys ?? {}), ...incomingProjectKeys }
+      }
+
+      if (shouldApplyFieldsets) {
+        if (payload.mode === "replace") {
+          nextFieldsets = { ...prev.fieldsets }
+          for (const [k, v] of Object.entries(fieldsetsToApply)) {
+            nextFieldsets[k] = JSON.parse(JSON.stringify(v)) as FieldsetData
+          }
+          if (fieldsetsToApplyByClient) {
+            nextByClient = { ...(prev.fieldsetsByClient ?? {}) }
+            for (const c of ALL_CATALOG_FIELDSET_CLIENTS) {
+              nextByClient[c] = { ...(nextByClient[c] ?? {}) }
+              for (const [k, v] of Object.entries(fieldsetsToApplyByClient[c] ?? {})) {
+                nextByClient[c][k] = JSON.parse(JSON.stringify(v)) as FieldsetData
+              }
+            }
+          }
+        } else {
+          nextFieldsets = mergeFieldsetRecords(prev.fieldsets, fieldsetsToApply)
+          if (fieldsetsToApplyByClient) {
+            nextByClient = mergeFieldsetsByClientMaps(
+              prev.fieldsetsByClient,
+              fieldsetsToApplyByClient,
+              ALL_CATALOG_FIELDSET_CLIENTS
+            )
+          }
+        }
+      }
+
+      if (importTypes && srcTypes.length > 0) {
+        if (payload.mode === "replace") {
+          const withoutReplaced = removeAssetTypesReplacedByIncoming(prev.assetTypes, incomingKeys)
+          nextAssetTypes = [...withoutReplaced, ...typesForAppend]
+        } else {
+          const existingKeys = new Set(prev.assetTypes.map(assetTypeMatchKey))
+          const toAdd = typesForAppend.filter((t) => !existingKeys.has(assetTypeMatchKey(t)))
+          nextAssetTypes = [...prev.assetTypes, ...toAdd]
+        }
+      }
+
+      const draft: TemplateAssetConfig = {
+        ...prev,
+        assetTypes: nextAssetTypes,
+        fieldsets: nextFieldsets,
+        fieldsetsByClient: nextByClient,
+        projectFieldsetKeys: nextProjectFieldsetKeys,
+      }
+      return draft.fieldsetsByClient
+        ? syncFlatFieldsetsFromPrimaryClient(draft)
+        : draft
+    })
   }
 
   return (
@@ -2265,62 +2536,61 @@ export function AssetTemplateDetail({
             </div>
           </div>
         </div>
-        
-        {/* Tabs */}
-        <div className="px-6">
-          <nav className="flex items-center gap-1 border-b-0">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
-                  activeTab === tab.id
-                    ? "text-foreground border-foreground"
-                    : "text-muted-foreground hover:text-foreground border-transparent"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </div>
       </div>
 
       <main className="flex-1 overflow-auto px-6 py-4">
-          {/* Search and Actions */}
-          <div className="mb-4 flex items-center justify-between">
-            <div className="relative w-64">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="text"
-                placeholder="Search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-            {activeTab === "types" && (
-              <div className="flex items-center gap-2">
-                {mode === "edit" && (
-                  <Button variant="outline" onClick={() => setBulkCreateOpen(true)}>
-                    <Upload className="h-4 w-4" />
-                    Bulk Create
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  onClick={handleExportDeepHierarchyCsv}
-                  title="Download Asset_Classification_Deep_Hierarchy.csv (hierarchy + fieldsets)"
-                >
-                  <Download className="h-4 w-4" />
-                  Export CSV
-                </Button>
-                {mode === "edit" && (
-                  <>
-                    <Button variant="outline" onClick={() => setCopyFromOpen(true)}>
-                      <Copy className="h-4 w-4" />
-                      Copy from
+          {catalogReadOnly && globalCatalog ? (
+            <GlobalAssetSettings
+              templates={allTemplates}
+              globalCatalog={globalCatalog}
+              onUpdateGlobalCatalog={() => {}}
+              templateView={{ templateId: template.id, embedded: true }}
+            />
+          ) : (
+            <>
+              {catalogReadOnly && (
+                <div className="mb-4 rounded-md border border-muted bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+                  Asset types and fieldsets are maintained in{" "}
+                  <span className="font-medium text-foreground">Asset settings</span>. This template uses a
+                  snapshot from when it was created or last updated. Use{" "}
+                  <span className="font-medium text-foreground">Import</span> below to pull from asset settings
+                  or another template (types, fieldsets, and project fieldset assignments when present). Export below reflects
+                  this template&apos;s copy.
+                </div>
+              )}
+              <div className="mb-4 flex items-center justify-between">
+                <div className="relative w-64">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    type="text"
+                    placeholder="Search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  {mode === "edit" && !catalogReadOnly && (
+                    <Button variant="outline" onClick={() => setBulkCreateOpen(true)}>
+                      <Upload className="h-4 w-4" />
+                      Bulk Create
                     </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    onClick={handleExportDeepHierarchyCsv}
+                    title="Download Asset_Classification_Deep_Hierarchy.csv (hierarchy + fieldsets)"
+                  >
+                    <Download className="h-4 w-4" />
+                    Export CSV
+                  </Button>
+                  {mode === "edit" && !catalogReadOnly && (
+                    <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+                      <FolderInput className="h-4 w-4" />
+                      Import
+                    </Button>
+                  )}
+                  {mode === "edit" && !catalogReadOnly && (
                     <Button
                       onClick={handleCreateType}
                       className="bg-orange-500 text-white hover:bg-orange-600"
@@ -2328,62 +2598,60 @@ export function AssetTemplateDetail({
                       <Plus className="h-4 w-4" />
                       Create Type
                     </Button>
-                  </>
-                )}
+                  )}
+                </div>
               </div>
-            )}
-          </div>
 
-          {activeTab === "types" && (
-            <AssetTypesTable
-              assetTypes={filteredAssetTypes}
-              allAssetTypesForAssembly={assetTypes}
-              onEdit={mode === "edit" ? handleEditType : undefined}
-              onDelete={mode === "edit" ? handleDeleteType : undefined}
-              onAddSubtype={mode === "edit" ? handleAddSubtype : undefined}
-            />
-          )}
-
-          {activeTab === "custom-field-mapping" && (
-            <CustomFieldMappingTable
-              mappings={customFieldMappings}
-              onUpdate={mode === "edit" ? (updated) => setCustomFieldMappings(updated) : undefined}
-            />
-          )}
-
-          {activeTab !== "types" && activeTab !== "custom-field-mapping" && (
-            <div className="flex h-64 items-center justify-center rounded-lg border bg-muted/30">
-              <p className="text-muted-foreground">
-                {activeTab.charAt(0).toUpperCase() + activeTab.slice(1).replace(/-/g, " ")} content coming soon
-              </p>
-            </div>
+              <AssetTypesTable
+                assetTypes={filteredAssetTypes}
+                allAssetTypesForAssembly={assetTypes}
+                hideFieldsetColumn
+                hideStatusGroupColumn
+                onEdit={mode === "edit" && !catalogReadOnly ? handleEditType : undefined}
+                onDelete={mode === "edit" && !catalogReadOnly ? handleDeleteType : undefined}
+                onAddSubtype={mode === "edit" && !catalogReadOnly ? handleAddSubtype : undefined}
+              />
+            </>
           )}
         </main>
 
       {/* Asset Type Edit Sheet */}
-      <AssetTypeSheet
-        open={sheetOpen}
-        onOpenChange={setSheetOpen}
-        assetType={editingAsset}
-        allAssetTypes={assetTypes}
-        onSave={handleSaveType}
-        fieldsets={fieldsets}
-      />
+      {!catalogReadOnly && (
+        <AssetTypeSheet
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
+          assetType={editingAsset}
+          allAssetTypes={assetTypes}
+          onSave={handleSaveType}
+          fieldsets={fieldsetsForUi}
+        />
+      )}
 
-      {/* Bulk Create Dialog */}
-      <CopyFromTemplateDialog
-        open={copyFromOpen}
-        onOpenChange={setCopyFromOpen}
-        templates={allTemplates}
-        currentTemplateId={template.id}
-        getAssetTypesForTemplate={getAssetTypesForTemplate}
-        onApply={handleCopyFromApply}
-      />
-      <BulkCreateDialog
-        open={bulkCreateOpen}
-        onOpenChange={setBulkCreateOpen}
-        onImport={handleBulkImport}
-      />
+      {mode === "edit" && !catalogReadOnly && (
+        <ImportFromTemplateDialog
+          open={importDialogOpen}
+          onOpenChange={setImportDialogOpen}
+          templates={allTemplates}
+          currentTemplateId={template.id}
+          getAssetTypesForTemplate={getAssetTypesForTemplate}
+          getFieldsetsForTemplate={getFieldsetsForTemplate}
+          onApply={handleImportApply}
+          catalogSources={[
+            {
+              id: COPY_SOURCE_COMPANY_CATALOG_ID,
+              label: "Asset settings",
+            },
+          ]}
+        />
+      )}
+
+      {!catalogReadOnly && (
+        <BulkCreateDialog
+          open={bulkCreateOpen}
+          onOpenChange={setBulkCreateOpen}
+          onImport={handleBulkImport}
+        />
+      )}
     </div>
   )
 }

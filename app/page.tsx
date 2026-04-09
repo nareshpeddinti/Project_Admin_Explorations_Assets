@@ -5,11 +5,23 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Header } from "@/components/header"
 import { AssetTemplatesTable, type AssetTemplate } from "@/components/asset-templates-table"
 import { AssetTemplateSheet } from "@/components/asset-template-sheet"
-import { AssetTemplateDetail } from "@/components/asset-template-detail"
+import {
+  AssetTemplateDetail,
+  remapAssetTypesWithNewIds,
+  type TemplateAssetConfig,
+} from "@/components/asset-template-detail"
+import { GlobalAssetSettings } from "@/components/global-asset-settings"
+import { cloneTemplateConfig, createEmptyTemplateConfig } from "@/lib/clone-template-asset-config"
+import { getSeedGlobalCatalog } from "@/lib/seed-global-catalog"
+import {
+  syncFlatFieldsetsFromPrimaryClient,
+} from "@/lib/build-multi-hierarchy-global-catalog"
+import { COPY_SOURCE_COMPANY_CATALOG_ID } from "@/lib/copy-template-sources"
+import { stripTemplateIdFromCatalogAssignments } from "@/lib/template-catalog-assignments"
 import { AssetsList } from "@/components/assets-list"
 import { CreateAssetSheet } from "@/components/create-asset-sheet"
 import { Button } from "@/components/ui/button"
-import { Plus, ChevronDown, Package, Settings } from "lucide-react"
+import { Plus, ChevronDown, Package, LayoutTemplate, Layers } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,7 +38,13 @@ export interface AssetType {
   name: string
   code: string
   description: string
+  /** Active fieldset object key in the catalog. */
   fieldset: string
+  /**
+   * Optional list of alternate fieldset keys this type may reference (e.g. catalog presets).
+   * Should include {@link fieldset} or it may be merged in at runtime.
+   */
+  fieldsetCandidates?: string[]
   statusGroup: string
   /** When true, this type represents a whole assembly (e.g. full turbine). Child types gain a default field to link to an asset of this type. */
   isAssembly?: boolean
@@ -50,6 +68,9 @@ export interface FieldsetData {
     name: string
     fields: string[]
   }[]
+  /** ISO timestamp; shown on Fieldsets admin table when set. */
+  updatedAt?: string
+  updatedBy?: string
 }
 
 const SAMPLE_PROJECTS = COMPANY_PROJECTS
@@ -58,7 +79,7 @@ const SAMPLE_PROJECTS = COMPANY_PROJECTS
 const initialTemplates: AssetTemplate[] = [
   {
     id: "template-default",
-    name: "Default Template",
+    name: "Procore Default Template",
     isDefault: true,
     assignedProjects: [],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -68,7 +89,7 @@ const initialTemplates: AssetTemplate[] = [
   },
   {
     id: "template-residential",
-    name: "Residential Building Template",
+    name: "Greystar Residential Template",
     isDefault: false,
     assignedProjects: ["res-1", "res-2", "res-3", "res-4", "res-5"],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -78,7 +99,7 @@ const initialTemplates: AssetTemplate[] = [
   },
   {
     id: "template-commercial",
-    name: "Commercial Building Template",
+    name: "Metro Commercial Building Template",
     isDefault: false,
     assignedProjects: ["com-1", "com-2", "com-3", "com-4", "com-5"],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -88,7 +109,7 @@ const initialTemplates: AssetTemplate[] = [
   },
   {
     id: "template-healthcare",
-    name: "Healthcare Facility Template",
+    name: "HCA Hospital Template",
     isDefault: false,
     assignedProjects: ["hc-1", "hc-2", "hc-3", "hc-4"],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -98,7 +119,7 @@ const initialTemplates: AssetTemplate[] = [
   },
   {
     id: "template-industrial",
-    name: "Industrial Facility Template",
+    name: "Eastside Manufacturing & Logistics Template",
     isDefault: false,
     assignedProjects: ["ind-1", "ind-2", "ind-3", "ind-4"],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -107,10 +128,30 @@ const initialTemplates: AssetTemplate[] = [
     updatedAt: "2026-01-15T10:00:00.000Z",
   },
   {
-    id: "template-datacenter",
-    name: "Data Center Template",
+    id: "template-datacenter-aws",
+    name: "AWS Data Centre Template",
     isDefault: false,
-    assignedProjects: ["dc-1", "dc-2", "dc-3"],
+    assignedProjects: ["dc-1"],
+    totalProjects: SAMPLE_PROJECTS.length,
+    createdBy: "Robert Wilson",
+    createdAt: "2025-12-01T11:00:00.000Z",
+    updatedAt: "2026-03-05T09:30:00.000Z",
+  },
+  {
+    id: "template-datacenter-meta",
+    name: "Meta Data Centre Template",
+    isDefault: false,
+    assignedProjects: ["dc-2"],
+    totalProjects: SAMPLE_PROJECTS.length,
+    createdBy: "Robert Wilson",
+    createdAt: "2025-12-01T11:00:00.000Z",
+    updatedAt: "2026-03-05T09:30:00.000Z",
+  },
+  {
+    id: "template-datacenter-oracle",
+    name: "Oracle Data Centre Template",
+    isDefault: false,
+    assignedProjects: ["dc-3"],
     totalProjects: SAMPLE_PROJECTS.length,
     createdBy: "Robert Wilson",
     createdAt: "2025-12-01T11:00:00.000Z",
@@ -118,7 +159,7 @@ const initialTemplates: AssetTemplate[] = [
   },
   {
     id: "template-windfarm",
-    name: "Wind Farm Template",
+    name: "North Sea Offshore Wind Template",
     isDefault: false,
     assignedProjects: ["wf-1", "wf-2", "wf-3"],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -128,7 +169,7 @@ const initialTemplates: AssetTemplate[] = [
   },
   {
     id: "template-highways",
-    name: "Highway & Corridor Template",
+    name: "Interstate Highway & Corridor Template",
     isDefault: false,
     assignedProjects: ["hw-1", "hw-2", "hw-3"],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -138,7 +179,7 @@ const initialTemplates: AssetTemplate[] = [
   },
   {
     id: "template-airport",
-    name: "Airport & Airfield Template",
+    name: "DNATA Airport & Airfield Template",
     isDefault: false,
     assignedProjects: ["ap-1", "ap-2", "ap-3"],
     totalProjects: SAMPLE_PROJECTS.length,
@@ -147,6 +188,8 @@ const initialTemplates: AssetTemplate[] = [
     updatedAt: "2026-03-14T10:20:00.000Z",
   },
 ]
+
+type CompanyNav = "assets" | "templates" | "globalAssetSettings"
 
 function AssetsPageContent() {
   const searchParams = useSearchParams()
@@ -158,12 +201,18 @@ function AssetsPageContent() {
   /** When true, project register map view fills viewport — main column scroll is disabled. */
   const [assetsMapViewportLock, setAssetsMapViewportLock] = useState(false)
   
-  // Navigation state - "assets" for Assets list, "settings" for Asset Templates/Settings
-  const [activeNav, setActiveNav] = useState<"assets" | "settings">("settings")
+  // Navigation: assets register | template list | asset settings (types + fieldsets)
+  const [activeNav, setActiveNav] = useState<CompanyNav>("globalAssetSettings")
   const [activeMainTab, setActiveMainTab] = useState<"list" | "recycle-bin">("list")
-  
-  // Template state
+
+  // Template state — each template holds a snapshot; edited from Asset settings in the nav
   const [templates, setTemplates] = useState<AssetTemplate[]>(initialTemplates)
+  const [globalCatalog, setGlobalCatalog] = useState<TemplateAssetConfig>(() =>
+    cloneTemplateConfig(getSeedGlobalCatalog())
+  )
+  const [templateAssetConfig, setTemplateAssetConfig] = useState<Record<string, TemplateAssetConfig>>(() =>
+    Object.fromEntries(initialTemplates.map((t) => [t.id, createEmptyTemplateConfig()]))
+  )
   const [templateSheetOpen, setTemplateSheetOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState<AssetTemplate | null>(null)
   
@@ -210,6 +259,27 @@ function AssetsPageContent() {
     if (!selectedProjectId) return null
     return resolveTemplateIdForProject(selectedProjectId, templates)
   }, [selectedProjectId, templates])
+
+  useEffect(() => {
+    setTemplateAssetConfig((prev) => {
+      const next = { ...prev }
+      for (const t of templates) {
+        if (!next[t.id]) next[t.id] = createEmptyTemplateConfig()
+      }
+      for (const id of Object.keys(next)) {
+        if (!templates.some((tm) => tm.id === id)) delete next[id]
+      }
+      return next
+    })
+  }, [templates, globalCatalog])
+
+  const resolveTemplateConfig = useCallback(
+    (id: string): TemplateAssetConfig =>
+      id === COPY_SOURCE_COMPANY_CATALOG_ID
+        ? syncFlatFieldsetsFromPrimaryClient(cloneTemplateConfig(globalCatalog))
+        : templateAssetConfig[id] ?? createEmptyTemplateConfig(),
+    [templateAssetConfig, globalCatalog]
+  )
 
   useEffect(() => {
     if (assetRegisterDeepLink) {
@@ -283,7 +353,12 @@ function AssetsPageContent() {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }
-      
+
+      setTemplateAssetConfig((prev) => ({
+        ...prev,
+        [newTemplate.id]: createEmptyTemplateConfig(),
+      }))
+
       if (newTemplate.isDefault) {
         setTemplates((prev) => [
           ...prev.map((t) => ({ ...t, isDefault: false })),
@@ -296,6 +371,26 @@ function AssetsPageContent() {
     setTemplateSheetOpen(false)
     setEditingTemplate(null)
   }
+
+  const createTemplateFromName = useCallback((name: string): AssetTemplate => {
+    const trimmed = name.trim() || "New Template"
+    const newTemplate: AssetTemplate = {
+      id: `template-${Date.now()}`,
+      name: trimmed,
+      isDefault: false,
+      assignedProjects: [],
+      totalProjects: SAMPLE_PROJECTS.length,
+      createdBy: "Current User",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    setTemplateAssetConfig((prev) => ({
+      ...prev,
+      [newTemplate.id]: createEmptyTemplateConfig(),
+    }))
+    setTemplates((prev) => [...prev, newTemplate])
+    return newTemplate
+  }, [])
 
   const handleSaveTemplateDetail = (template: AssetTemplate) => {
     setTemplates((prev) =>
@@ -314,11 +409,38 @@ function AssetsPageContent() {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
+    const base = templateAssetConfig[template.id] ?? createEmptyTemplateConfig()
+    const clonedTypes = JSON.parse(JSON.stringify(base.assetTypes)) as AssetType[]
+    const clonedFs = JSON.parse(JSON.stringify(base.fieldsets)) as TemplateAssetConfig["fieldsets"]
+    const clonedByClient = base.fieldsetsByClient
+      ? (JSON.parse(JSON.stringify(base.fieldsetsByClient)) as NonNullable<
+          TemplateAssetConfig["fieldsetsByClient"]
+        >)
+      : undefined
+    const clonedProj = base.projectFieldsetKeys
+      ? (JSON.parse(JSON.stringify(base.projectFieldsetKeys)) as Record<string, string>)
+      : undefined
+    setTemplateAssetConfig((prev) => ({
+      ...prev,
+      [copiedTemplate.id]: {
+        assetTypes: remapAssetTypesWithNewIds(clonedTypes),
+        fieldsets: clonedFs,
+        ...(clonedByClient ? { fieldsetsByClient: clonedByClient } : {}),
+        ...(clonedProj ? { projectFieldsetKeys: clonedProj } : {}),
+      },
+    }))
     setTemplates((prev) => [...prev, copiedTemplate])
   }
 
   const handleDeleteTemplate = (templateId: string) => {
     setTemplates((prev) => prev.filter((t) => t.id !== templateId))
+    setTemplateAssetConfig((prev) => {
+      const { [templateId]: _removed, ...rest } = prev
+      return rest
+    })
+    setGlobalCatalog((prev) =>
+      syncFlatFieldsetsFromPrimaryClient(stripTemplateIdFromCatalogAssignments(prev, templateId))
+    )
   }
 
   const handleSetDefaultTemplate = (templateId: string) => {
@@ -356,6 +478,8 @@ function AssetsPageContent() {
 
   // If a template is selected, show the detail view
   if (selectedTemplate) {
+    const detailConfig =
+      templateAssetConfig[selectedTemplate.id] ?? createEmptyTemplateConfig()
     return (
       <div className="min-h-screen bg-background">
         <Header sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} {...headerProps} />
@@ -368,7 +492,11 @@ function AssetsPageContent() {
           >
             <nav className="p-3 space-y-1 w-56">
               <button
-                onClick={() => { setActiveNav("assets"); setSidebarOpen(false); }}
+                onClick={() => {
+                  setSelectedTemplate(null)
+                  setActiveNav("assets")
+                  setSidebarOpen(false)
+                }}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                   activeNav === "assets"
                     ? "bg-orange-500 text-white"
@@ -379,17 +507,38 @@ function AssetsPageContent() {
                 Assets
               </button>
               {isCompanyLevel ? (
-                <button
-                  onClick={() => { setActiveNav("settings"); setSidebarOpen(false); }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                    activeNav === "settings"
-                      ? "bg-orange-500 text-white"
-                      : "text-foreground hover:bg-muted"
-                  }`}
-                >
-                  <Settings className="h-4 w-4" />
-                  Asset Settings
-                </button>
+                <>
+                  <button
+                    onClick={() => {
+                      handleBackToList()
+                      setActiveNav("templates")
+                      setSidebarOpen(false)
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                      activeNav === "templates"
+                        ? "bg-orange-500 text-white"
+                        : "text-foreground hover:bg-muted"
+                    }`}
+                  >
+                    <LayoutTemplate className="h-4 w-4" />
+                    Templates
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleBackToList()
+                      setActiveNav("globalAssetSettings")
+                      setSidebarOpen(false)
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                      activeNav === "globalAssetSettings"
+                        ? "bg-orange-500 text-white"
+                        : "text-foreground hover:bg-muted"
+                    }`}
+                  >
+                    <Layers className="h-4 w-4" />
+                    Asset settings
+                  </button>
+                </>
               ) : null}
             </nav>
           </aside>
@@ -400,6 +549,17 @@ function AssetsPageContent() {
               onBack={handleBackToList}
               onSave={handleSaveTemplateDetail}
               mode={templateViewMode}
+              templateConfig={detailConfig}
+              catalogReadOnly
+              globalCatalog={globalCatalog}
+              onTemplateConfigChange={(updater) => {
+                setTemplateAssetConfig((prev) => {
+                  const tid = selectedTemplate.id
+                  const cur = prev[tid] ?? createEmptyTemplateConfig()
+                  return { ...prev, [tid]: updater(cur) }
+                })
+              }}
+              resolveTemplateConfig={resolveTemplateConfig}
             />
           </div>
         </div>
@@ -421,7 +581,10 @@ function AssetsPageContent() {
         >
           <nav className="p-3 space-y-1 w-56">
             <button
-              onClick={() => { setActiveNav("assets"); setSidebarOpen(false); }}
+              onClick={() => {
+                setActiveNav("assets")
+                setSidebarOpen(false)
+              }}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 activeNav === "assets"
                   ? "bg-orange-500 text-white"
@@ -432,17 +595,36 @@ function AssetsPageContent() {
               Assets
             </button>
             {isCompanyLevel ? (
-              <button
-                onClick={() => { setActiveNav("settings"); setSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                  activeNav === "settings"
-                    ? "bg-orange-500 text-white"
-                    : "text-foreground hover:bg-muted"
-                }`}
-              >
-                <Settings className="h-4 w-4" />
-                Asset Settings
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    setActiveNav("templates")
+                    setSidebarOpen(false)
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    activeNav === "templates"
+                      ? "bg-orange-500 text-white"
+                      : "text-foreground hover:bg-muted"
+                  }`}
+                >
+                  <LayoutTemplate className="h-4 w-4" />
+                  Templates
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveNav("globalAssetSettings")
+                    setSidebarOpen(false)
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    activeNav === "globalAssetSettings"
+                      ? "bg-orange-500 text-white"
+                      : "text-foreground hover:bg-muted"
+                  }`}
+                >
+                  <Layers className="h-4 w-4" />
+                  Asset settings
+                </button>
+              </>
             ) : null}
           </nav>
         </aside>
@@ -484,7 +666,7 @@ function AssetsPageContent() {
                     </p>
                   ) : (
                     <p className="text-sm text-muted-foreground mt-1">
-                      Company asset register — choose a template in the toolbar to load that catalog
+                      Company asset register — choose a template in the toolbar to load that template
                     </p>
                   )}
                 </div>
@@ -531,17 +713,14 @@ function AssetsPageContent() {
             </div>
           )}
 
-          {/* Asset Settings/Templates View */}
-          {activeNav === "settings" && (
+          {/* Templates list (assign projects, open template detail) */}
+          {activeNav === "templates" && (
             <div className="min-h-0 flex-1 overflow-y-auto">
               {/* Page Title with Create button */}
               <div className="mb-4 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="p-1.5 rounded bg-muted">
-                    <svg className="h-5 w-5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
+                    <LayoutTemplate className="h-5 w-5 text-muted-foreground" />
                   </div>
                   <h1 className="text-2xl font-bold text-foreground">Asset Templates</h1>
                 </div>
@@ -597,6 +776,19 @@ function AssetsPageContent() {
                   <p className="text-muted-foreground">No deleted templates</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeNav === "globalAssetSettings" && (
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <GlobalAssetSettings
+                templates={templates}
+                globalCatalog={globalCatalog}
+                onUpdateGlobalCatalog={(updater) =>
+                  setGlobalCatalog((prev) => syncFlatFieldsetsFromPrimaryClient(updater(prev)))
+                }
+                onCreateTemplate={createTemplateFromName}
+              />
             </div>
           )}
         </main>

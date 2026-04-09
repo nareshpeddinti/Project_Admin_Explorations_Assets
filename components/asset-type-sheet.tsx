@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { X, HelpCircle, ChevronDown, ChevronRight, Layers, Boxes } from "lucide-react"
 import {
   Sheet,
@@ -20,6 +20,13 @@ import {
 import { cn } from "@/lib/utils"
 import type { AssetType, FieldsetData } from "@/app/page"
 import { Switch } from "@/components/ui/switch"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { mergeFieldsetWithAssemblyLinkage } from "@/lib/merge-fieldset-assembly"
 
 // Fieldset section structure
@@ -39,8 +46,11 @@ interface AssetTypeSheetProps {
     code: string
     description: string
     isAssembly?: boolean
+    fieldset?: string
   }) => void
   fieldsets: Record<string, FieldsetData>
+  /** When true (e.g. company global catalog), user can assign any known fieldset to the type. */
+  allowFieldsetAssignment?: boolean
 }
 
 function FieldsetSectionDisplay({ section, isExpanded, onToggle }: { 
@@ -89,19 +99,41 @@ export function AssetTypeSheet({
   allAssetTypes = [],
   onSave,
   fieldsets,
+  allowFieldsetAssignment = false,
 }: AssetTypeSheetProps) {
   const [name, setName] = useState("")
   const [code, setCode] = useState("")
   const [description, setDescription] = useState("")
   const [isAssembly, setIsAssembly] = useState(false)
+  const [selectedFieldsetKey, setSelectedFieldsetKey] = useState("Procore Default")
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
 
-  // Get fieldset data for the current asset type from the passed fieldsets prop
-  const rawFieldset = assetType ? fieldsets[assetType.fieldset] || fieldsets["Procore Default"] : null
+  const fieldsetOptions = useMemo(
+    () =>
+      Object.keys(fieldsets)
+        .map((k) => ({ value: k, label: (fieldsets[k]?.name ?? "").trim() || k }))
+        .sort((a, b) => {
+          if (a.value === "Procore Default") return -1
+          if (b.value === "Procore Default") return 1
+          return a.label.localeCompare(b.label)
+        }),
+    [fieldsets]
+  )
+
+  const effectiveFieldsetKey = allowFieldsetAssignment
+    ? selectedFieldsetKey in fieldsets
+      ? selectedFieldsetKey
+      : "Procore Default"
+    : assetType?.fieldset && fieldsets[assetType.fieldset]
+      ? assetType.fieldset
+      : "Procore Default"
+
+  const rawFieldsetForPreview = fieldsets[effectiveFieldsetKey] || fieldsets["Procore Default"] || null
+  const linkageTypeId = assetType?.id ?? "__new_type__"
   const fieldset =
-    assetType && rawFieldset
-      ? mergeFieldsetWithAssemblyLinkage(rawFieldset, allAssetTypes, assetType.id)
-      : rawFieldset
+    rawFieldsetForPreview && (allowFieldsetAssignment || assetType)
+      ? mergeFieldsetWithAssemblyLinkage(rawFieldsetForPreview, allAssetTypes, linkageTypeId)
+      : rawFieldsetForPreview
 
   const toggleSection = (sectionName: string) => {
     setExpandedSections(prev => {
@@ -121,8 +153,10 @@ export function AssetTypeSheet({
       setCode(assetType.code)
       setDescription(assetType.description)
       setIsAssembly(!!assetType.isAssembly)
-      // Expand first section by default
-      const fs = fieldsets[assetType.fieldset] || fieldsets["Procore Default"]
+      const fk =
+        assetType.fieldset && fieldsets[assetType.fieldset] ? assetType.fieldset : "Procore Default"
+      setSelectedFieldsetKey(fk)
+      const fs = fieldsets[fk] || fieldsets["Procore Default"]
       const merged =
         fs && mergeFieldsetWithAssemblyLinkage(fs, allAssetTypes, assetType.id)
       const firstName = merged?.sections?.[0]?.name ?? fs?.sections?.[0]?.name
@@ -134,13 +168,30 @@ export function AssetTypeSheet({
       setCode("")
       setDescription("")
       setIsAssembly(false)
+      setSelectedFieldsetKey("Procore Default")
       setExpandedSections(new Set())
     }
   }, [assetType, open, fieldsets, allAssetTypes])
 
+  useEffect(() => {
+    if (!open || !allowFieldsetAssignment) return
+    const fs = fieldsets[selectedFieldsetKey] || fieldsets["Procore Default"]
+    if (!fs) return
+    const merged =
+      assetType && mergeFieldsetWithAssemblyLinkage(fs, allAssetTypes, assetType.id)
+    const firstName = merged?.sections?.[0]?.name ?? fs.sections?.[0]?.name
+    if (firstName) setExpandedSections(new Set([firstName]))
+  }, [selectedFieldsetKey, open, allowFieldsetAssignment, fieldsets, assetType, allAssetTypes])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    onSave({ name, code, description, isAssembly })
+    onSave({
+      name,
+      code,
+      description,
+      isAssembly,
+      ...(allowFieldsetAssignment ? { fieldset: effectiveFieldsetKey } : {}),
+    })
   }
 
   const isEditing = !!assetType
@@ -235,8 +286,48 @@ export function AssetTypeSheet({
               />
             </div>
 
-            {/* Fieldset Display */}
-            {isEditing && fieldset && (
+            {allowFieldsetAssignment ? (
+              <div className="space-y-3 pt-2 border-t">
+                <div className="flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-orange-500" />
+                  <Label htmlFor="fieldset-select" className="text-sm font-medium">
+                    Fieldset
+                  </Label>
+                </div>
+                <Select value={selectedFieldsetKey} onValueChange={setSelectedFieldsetKey}>
+                  <SelectTrigger id="fieldset-select" className="w-full">
+                    <SelectValue placeholder="Select fieldset" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {fieldsetOptions.map((o) => (
+                      <SelectItem key={o.value} value={o.value} title={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Choose a company fieldset (e.g. Residential HVAC, Data Center Server). Create more under the
+                  Fieldsets tab in Asset settings.
+                </p>
+                {fieldset && (
+                  <div className="space-y-2 pt-2">
+                    <Label className="text-xs font-medium text-muted-foreground">Preview</Label>
+                    {fieldset.sections.map((section) => (
+                      <FieldsetSectionDisplay
+                        key={section.name}
+                        section={section}
+                        isExpanded={expandedSections.has(section.name)}
+                        onToggle={() => toggleSection(section.name)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {/* Fieldset Display (template detail — read-only picker) */}
+            {!allowFieldsetAssignment && isEditing && fieldset && (
               <div className="space-y-3 pt-4 border-t">
                 <div className="flex items-center gap-2">
                   <Layers className="h-4 w-4 text-orange-500" />

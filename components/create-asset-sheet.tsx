@@ -27,6 +27,10 @@ import { TEMPLATE_ASSETS } from "@/components/assets-list"
 import { cn } from "@/lib/utils"
 import type { AssetType } from "@/app/page"
 import { TEMPLATE_ASSET_TYPES } from "@/lib/template-asset-types"
+import {
+  buildMultiClientFieldsetDisplayName,
+  FIELDSET_DISPLAY_PRIMARY_CLIENT,
+} from "@/lib/fieldset-display-names"
 
 interface FieldsetSection {
   name: string
@@ -50,6 +54,72 @@ interface CreateAssetSheetProps {
   /** Project context: single template assigned to the project — hide template picker. */
   lockedTemplateId?: string
   onSave?: (data: Record<string, string>) => void
+}
+
+/** Shared DC fieldset definitions (AWS / Meta / Oracle templates). */
+const TEMPLATE_FIELDSETS_DATACENTER: Record<string, FieldsetData> = {
+  "23_Fieldset": {
+    name: "23_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
+    ]
+  },
+  "23-GEN_Fieldset": {
+    name: "23-GEN_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
+      { name: "Technical Details", fields: ["Fluid Type (Glycol/Water)", "Max Working Pressure", "Dry/Wet Weight"] },
+    ]
+  },
+  "23-AIR_Fieldset": {
+    name: "23-AIR_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Cooling Data", fields: ["Cooling Capacity (kW)", "Airflow (CFM)", "Supply Air Temp"] },
+      { name: "Operational", fields: ["Redundancy Level", "ASHRAE Compliance", "Monitoring Integration"] },
+    ]
+  },
+  "23-PMP_Fieldset": {
+    name: "23-PMP_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Pump Data", fields: ["Flow Rate (GPM)", "Head Pressure (ft)", "Motor HP"] },
+      { name: "Control", fields: ["VFD Controlled", "Redundancy Configuration", "Alarm Set Points"] },
+    ]
+  },
+  "26_Fieldset": {
+    name: "26_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
+    ]
+  },
+  "26-PWR_Fieldset": {
+    name: "26-PWR_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
+      { name: "Distribution Details", fields: ["Number of Circuits", "Load Capacity (kW)", "Metering Integration"] },
+    ]
+  },
+  "26-UPS_Fieldset": {
+    name: "26-UPS_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "UPS Specifications", fields: ["Capacity (kVA)", "Runtime (Minutes)", "Efficiency Rating"] },
+      { name: "Battery Details", fields: ["Battery Type", "String Count", "Expected Life (Years)"] },
+    ]
+  },
+  "26-GEN_Fieldset": {
+    name: "26-GEN_Fieldset",
+    sections: [
+      { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+      { name: "Generator Specifications", fields: ["Capacity (kW)", "Voltage Output", "Fuel Type"] },
+      { name: "Operational Details", fields: ["Fuel Tank Capacity", "Load Bank Test Date", "Runtime Hours"] },
+    ]
+  },
 }
 
 // Fieldsets for each template
@@ -362,70 +432,9 @@ const TEMPLATE_FIELDSETS: Record<string, Record<string, FieldsetData>> = {
       ]
     },
   },
-  "template-datacenter": {
-    "23_Fieldset": {
-      name: "23_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
-      ]
-    },
-    "23-GEN_Fieldset": {
-      name: "23-GEN_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Mechanical Data", fields: ["Design Flow Rate", "Operating Set Point", "BMS Integration Protocol"] },
-        { name: "Technical Details", fields: ["Fluid Type (Glycol/Water)", "Max Working Pressure", "Dry/Wet Weight"] },
-      ]
-    },
-    "23-AIR_Fieldset": {
-      name: "23-AIR_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Cooling Data", fields: ["Cooling Capacity (kW)", "Airflow (CFM)", "Supply Air Temp"] },
-        { name: "Operational", fields: ["Redundancy Level", "ASHRAE Compliance", "Monitoring Integration"] },
-      ]
-    },
-    "23-PMP_Fieldset": {
-      name: "23-PMP_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Pump Data", fields: ["Flow Rate (GPM)", "Head Pressure (ft)", "Motor HP"] },
-        { name: "Control", fields: ["VFD Controlled", "Redundancy Configuration", "Alarm Set Points"] },
-      ]
-    },
-    "26_Fieldset": {
-      name: "26_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
-      ]
-    },
-    "26-PWR_Fieldset": {
-      name: "26-PWR_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Power Specifications", fields: ["Voltage Rating", "Amperage", "Power Factor"] },
-        { name: "Distribution Details", fields: ["Number of Circuits", "Load Capacity (kW)", "Metering Integration"] },
-      ]
-    },
-    "26-UPS_Fieldset": {
-      name: "26-UPS_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "UPS Specifications", fields: ["Capacity (kVA)", "Runtime (Minutes)", "Efficiency Rating"] },
-        { name: "Battery Details", fields: ["Battery Type", "String Count", "Expected Life (Years)"] },
-      ]
-    },
-    "26-GEN_Fieldset": {
-      name: "26-GEN_Fieldset",
-      sections: [
-        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
-        { name: "Generator Specifications", fields: ["Capacity (kW)", "Voltage Output", "Fuel Type"] },
-        { name: "Operational Details", fields: ["Fuel Tank Capacity", "Load Bank Test Date", "Runtime Hours"] },
-      ]
-    },
-  },
+  "template-datacenter-aws": TEMPLATE_FIELDSETS_DATACENTER,
+  "template-datacenter-meta": TEMPLATE_FIELDSETS_DATACENTER,
+  "template-datacenter-oracle": TEMPLATE_FIELDSETS_DATACENTER,
   "template-windfarm": {
     "WF_TURB_Fieldset": {
       name: "WF_TURB_Fieldset",
@@ -807,6 +816,31 @@ const TEMPLATE_FIELDSETS: Record<string, Record<string, FieldsetData>> = {
         },
       ],
     },
+    "AP_NAV_Fieldset": {
+      name: "AP_NAV_Fieldset",
+      sections: [
+        { name: "General Information", fields: ["Asset Name", "Asset Code", "Description", "Location", "Status"] },
+        {
+          name: "FAA Nav Aid",
+          fields: [
+            "Facility ID / Designator",
+            "Frequency (MHz)",
+            "Monitor / Remote Status",
+            "Flight Check Due Date",
+            "Critical Area / ILS SSM Integration",
+          ],
+        },
+        {
+          name: "Sustainment",
+          fields: [
+            "OEM / Maintainer Contract",
+            "Spares Kit Ref",
+            "Last FAR Part 171 Inspection",
+            "NOTAM Coordination Contact",
+          ],
+        },
+      ],
+    },
     "AP_BHS_Fieldset": {
       name: "AP_BHS_Fieldset",
       sections: [
@@ -979,8 +1013,14 @@ export function CreateAssetSheet({
     const templateFieldsets = TEMPLATE_FIELDSETS[selectedTemplate]
     if (!templateFieldsets) return null
     const raw = templateFieldsets[selectedAssetType.fieldset] || null
-    if (!raw || !selectedAssetType.id) return raw
-    return mergeFieldsetWithAssemblyLinkage(raw, assetTypes, selectedAssetType.id)
+    if (!raw) return null
+    const base = JSON.parse(JSON.stringify(raw)) as FieldsetData
+    base.name = buildMultiClientFieldsetDisplayName(
+      selectedAssetType.fieldset,
+      FIELDSET_DISPLAY_PRIMARY_CLIENT
+    )
+    if (!selectedAssetType.id) return base
+    return mergeFieldsetWithAssemblyLinkage(base, assetTypes, selectedAssetType.id)
   }
 
   const fieldset = getFieldset()

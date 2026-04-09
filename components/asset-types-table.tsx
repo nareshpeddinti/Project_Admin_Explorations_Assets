@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { GripVertical, ChevronRight, ChevronDown, Pencil, MoreVertical, Plus } from "lucide-react"
 import {
   Table,
@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,8 +25,10 @@ import {
 } from "@/components/ui/tooltip"
 import { HelpCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { AssetType } from "@/app/page"
+import type { AssetType, FieldsetData } from "@/app/page"
+import type { AssetTemplate } from "@/components/asset-templates-table"
 import { Badge } from "@/components/ui/badge"
+import { fieldsetPrimaryAndExtraCount } from "@/lib/fieldset-client-labels"
 import {
   typeRequiresParentAssemblyField,
 } from "@/lib/assembly-asset-types"
@@ -38,6 +41,45 @@ interface AssetTypesTableProps {
   onDelete?: (id: string) => void
   onAddSubtype?: (parentId: string) => void
   onToggleExpand?: (id: string) => void
+  /** Merged onto the outer wrapper (e.g. `border-0 rounded-none` when nested in a card). */
+  className?: string
+  /**
+   * When true, every row that has children starts expanded (full trees visible).
+   * Useful for company level asset settings with multiple top-level hierarchies.
+   */
+  expandAllParentRows?: boolean
+  /** When set, shows the human-readable fieldset name (e.g. per-client label) above the object key. */
+  resolveFieldsetDisplay?: (fieldsetKey: string) => string | undefined
+  /**
+   * When set with `fieldsetClientOrder`, shows the first distinct display name plus "+N" for other
+   * client-specific names (same fieldset key). Ignored if `fieldsetsByClient` is omitted.
+   */
+  fieldsetsByClient?: Record<string, Record<string, FieldsetData>>
+  /** Client keys in display order (e.g. AWS, Meta, Oracle). */
+  fieldsetClientOrder?: readonly string[]
+  /** Fallback map when a key is missing from all clients (usually primary / synced flat fieldsets). */
+  fieldsetFallbackFieldsets?: Record<string, FieldsetData>
+  /** Hide the Fieldset column (e.g. asset template view — fieldsets live in Asset settings). */
+  hideFieldsetColumn?: boolean
+  /** Hide the Status Group column (e.g. asset template view). */
+  hideStatusGroupColumn?: boolean
+  /** Company level: checkbox column + bulk selection for template assignment */
+  templateRowSelection?: {
+    selectedIds: Set<string>
+    onToggle: (assetTypeId: string, selected: boolean) => void
+    visibleAssetTypeIds: string[]
+    onSelectAllVisible: (select: boolean) => void
+  }
+  /** Company level: Assigned Templates column (count / total, opens picker in parent) */
+  assignedTemplatesColumn?: {
+    totalTemplates: number
+    assignments: Record<string, string[]>
+    onCellClick: (assetTypeId: string) => void
+    /** When true, show count as plain text (no assignment picker). */
+    readOnly?: boolean
+  }
+  /** Hide the Actions column (e.g. read-only template view). */
+  hideActionsColumn?: boolean
 }
 
 export function AssetTypesTable({ 
@@ -46,10 +88,50 @@ export function AssetTypesTable({
   onEdit, 
   onDelete,
   onAddSubtype,
-  onToggleExpand 
+  onToggleExpand,
+  className,
+  expandAllParentRows = false,
+  resolveFieldsetDisplay,
+  fieldsetsByClient,
+  fieldsetClientOrder,
+  fieldsetFallbackFieldsets,
+  hideFieldsetColumn = false,
+  hideStatusGroupColumn = false,
+  templateRowSelection,
+  assignedTemplatesColumn,
+  hideActionsColumn = false,
 }: AssetTypesTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  const tableColumnCount =
+    7 -
+    (hideFieldsetColumn ? 1 : 0) -
+    (hideStatusGroupColumn ? 1 : 0) +
+    (templateRowSelection ? 1 : 0) +
+    (assignedTemplatesColumn ? 1 : 0) -
+    (hideActionsColumn ? 1 : 0)
   const assemblyLookup = allAssetTypesForAssembly ?? assetTypes
+
+  const allVisibleTypesSelected =
+    templateRowSelection &&
+    templateRowSelection.visibleAssetTypeIds.length > 0 &&
+    templateRowSelection.visibleAssetTypeIds.every((id) =>
+      templateRowSelection.selectedIds.has(id)
+    )
+  const someVisibleTypesSelected =
+    templateRowSelection &&
+    templateRowSelection.visibleAssetTypeIds.some((id) =>
+      templateRowSelection.selectedIds.has(id)
+    ) &&
+    !allVisibleTypesSelected
+
+  useEffect(() => {
+    if (!expandAllParentRows) return
+    const withChildren = new Set<string>()
+    for (const a of assetTypes) {
+      if (a.parentId) withChildren.add(a.parentId)
+    }
+    setExpandedRows(withChildren)
+  }, [expandAllParentRows, assetTypes])
 
   const toggleExpand = (id: string) => {
     setExpandedRows((prev) => {
@@ -90,6 +172,11 @@ export function AssetTypesTable({
     const showExpandIcon = asset.hasSubtypes || children.length > 0 || hasChildren(asset.id)
     const indentPadding = depth * 24
 
+    const assignedTemplateCount = assignedTemplatesColumn
+      ? (assignedTemplatesColumn.assignments[asset.id]?.length ?? 0)
+      : 0
+    const assignedTotal = assignedTemplatesColumn?.totalTemplates ?? 0
+
     return (
       <>
         <TableRow 
@@ -99,6 +186,17 @@ export function AssetTypesTable({
             isExpanded && "bg-muted/30"
           )}
         >
+          {templateRowSelection ? (
+            <TableCell className="w-10 align-middle">
+              <Checkbox
+                checked={templateRowSelection.selectedIds.has(asset.id)}
+                onCheckedChange={(c) =>
+                  templateRowSelection.onToggle(asset.id, c === true)
+                }
+                aria-label={`Select ${asset.name}`}
+              />
+            </TableCell>
+          ) : null}
           <TableCell className="w-12">
             <div 
               className="flex items-center gap-1"
@@ -155,9 +253,78 @@ export function AssetTypesTable({
             </div>
           </TableCell>
           <TableCell className="text-muted-foreground">{asset.code}</TableCell>
-          <TableCell className="text-muted-foreground">{asset.description}</TableCell>
-          <TableCell className="text-muted-foreground">{asset.fieldset}</TableCell>
-          <TableCell className="text-muted-foreground">{asset.statusGroup}</TableCell>
+          <TableCell className="min-w-0 max-w-[100px] text-muted-foreground">
+            <span className="block truncate" title={asset.description || undefined}>
+              {asset.description}
+            </span>
+          </TableCell>
+          {!hideFieldsetColumn ? (
+            <TableCell className="text-muted-foreground">
+              {fieldsetsByClient && fieldsetClientOrder && fieldsetFallbackFieldsets ? (
+                (() => {
+                  const { primary, extraCount, tooltipLines } = fieldsetPrimaryAndExtraCount(
+                    asset.fieldset,
+                    fieldsetsByClient,
+                    fieldsetClientOrder,
+                    fieldsetFallbackFieldsets
+                  )
+                  return (
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-sm text-foreground">{primary}</span>
+                        {extraCount > 0 ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge
+                                variant="secondary"
+                                className="h-5 px-1.5 text-[10px] font-normal tabular-nums"
+                              >
+                                +{extraCount}
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs whitespace-pre-line text-left">
+                              {tooltipLines.join("\n")}
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : null}
+                      </div>
+                      <span className="font-mono text-xs text-muted-foreground">{asset.fieldset}</span>
+                    </div>
+                  )
+                })()
+              ) : resolveFieldsetDisplay ? (
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm text-foreground">
+                    {resolveFieldsetDisplay(asset.fieldset) ?? asset.fieldset}
+                  </span>
+                  <span className="font-mono text-xs text-muted-foreground">{asset.fieldset}</span>
+                </div>
+              ) : (
+                asset.fieldset
+              )}
+            </TableCell>
+          ) : null}
+          {!hideStatusGroupColumn ? (
+            <TableCell className="text-muted-foreground">{asset.statusGroup}</TableCell>
+          ) : null}
+          {assignedTemplatesColumn ? (
+            <TableCell className="text-sm">
+              {assignedTemplatesColumn.readOnly ? (
+                <span className="text-muted-foreground">
+                  {assignedTemplateCount}/{assignedTotal} Templates
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={() => assignedTemplatesColumn.onCellClick(asset.id)}
+                >
+                  {assignedTemplateCount}/{assignedTotal} Templates
+                </button>
+              )}
+            </TableCell>
+          ) : null}
+          {!hideActionsColumn ? (
           <TableCell>
             {(onEdit || onDelete || onAddSubtype) && (
               <div className="flex items-center justify-end gap-1">
@@ -210,6 +377,7 @@ export function AssetTypesTable({
               </div>
             )}
           </TableCell>
+          ) : null}
         </TableRow>
         {isExpanded && children.map((child) => (
           <React.Fragment key={child.id}>{renderRow(child, depth + 1)}</React.Fragment>
@@ -219,10 +387,27 @@ export function AssetTypesTable({
   }
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div className={cn("border rounded-lg overflow-hidden", className)}>
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/50">
+            {templateRowSelection ? (
+              <TableHead className="w-10">
+                <Checkbox
+                  checked={
+                    allVisibleTypesSelected
+                      ? true
+                      : someVisibleTypesSelected
+                        ? "indeterminate"
+                        : false
+                  }
+                  onCheckedChange={(c) =>
+                    templateRowSelection.onSelectAllVisible(c === true)
+                  }
+                  aria-label="Select all visible asset types"
+                />
+              </TableHead>
+            ) : null}
             <TableHead className="w-12"></TableHead>
             <TableHead className="min-w-[200px]">
               <div className="flex items-center gap-2">
@@ -254,16 +439,25 @@ export function AssetTypesTable({
                 </Tooltip>
               </div>
             </TableHead>
-            <TableHead className="min-w-[200px]">Description</TableHead>
-            <TableHead className="min-w-[180px]">Fieldset</TableHead>
-            <TableHead className="min-w-[200px]">Status Group</TableHead>
-            <TableHead className="w-48 text-right">Actions</TableHead>
+            <TableHead className="min-w-[72px] max-w-[100px] w-[100px]">Description</TableHead>
+            {!hideFieldsetColumn ? (
+              <TableHead className="min-w-[180px]">Fieldset</TableHead>
+            ) : null}
+            {!hideStatusGroupColumn ? (
+              <TableHead className="min-w-[200px]">Status Group</TableHead>
+            ) : null}
+            {assignedTemplatesColumn ? (
+              <TableHead className="min-w-[150px]">Assigned Templates</TableHead>
+            ) : null}
+            {!hideActionsColumn ? (
+              <TableHead className="w-48 text-right">Actions</TableHead>
+            ) : null}
           </TableRow>
         </TableHeader>
         <TableBody>
           {topLevelAssets.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={7} className="h-32 text-center">
+              <TableCell colSpan={tableColumnCount} className="h-32 text-center">
                 <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
                   <p>No asset types found</p>
                   <p className="text-sm">Create a new asset type to get started</p>

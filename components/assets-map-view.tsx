@@ -610,7 +610,6 @@ export function AssetsMapView({
                   offset={[0, -10]}
                   opacity={1}
                   sticky
-                  autoPan={false}
                   className="!rounded-md !border !border-border !bg-popover !px-2.5 !py-2 !text-popover-foreground !shadow-md [&_.leaflet-tooltip-tip]:!bg-popover [&_.leaflet-tooltip-tip]:!border-border"
                 >
                   <AssetTooltipContent

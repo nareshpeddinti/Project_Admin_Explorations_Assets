@@ -15,8 +15,8 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { AssetTemplate } from "@/components/asset-templates-table"
-import type { AssetType } from "@/app/page"
-import { ChevronDown, ChevronRight, Copy, Info } from "lucide-react"
+import type { AssetType, FieldsetData } from "@/app/page"
+import { ChevronDown, ChevronRight, Info, FolderInput } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -27,26 +27,30 @@ import {
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
-export type CopyFromApplyPayload = {
+export type ImportFromApplyPayload = {
   sourceTemplateId: string
-  copyFieldsets: boolean
   mode: "replace" | "merge"
-  /**
-   * Which source asset type ids to copy (required when the source template has types).
-   * Parents are auto-included on apply. Fieldsets can only be copied together with a non-empty
-   * selection when the source has types.
-   */
+  /** Selected hierarchy nodes (subtrees include descendants; ancestors added on import). */
   selectedAssetTypeIds: string[]
+  /**
+   * Only when the source has no asset types: which fieldset definitions to import.
+   * When the source has types, fieldsets are derived automatically from the selection.
+   */
+  selectedFieldsetKeys?: string[]
 }
 
-interface CopyFromTemplateDialogProps {
+/** @deprecated use ImportFromApplyPayload */
+export type CopyFromApplyPayload = ImportFromApplyPayload
+
+interface ImportFromTemplateDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   templates: AssetTemplate[]
   currentTemplateId: string
-  /** Load asset types for the source template (preset data). */
   getAssetTypesForTemplate: (templateId: string) => AssetType[]
-  onApply: (payload: CopyFromApplyPayload) => void
+  getFieldsetsForTemplate: (templateId: string) => Record<string, FieldsetData>
+  onApply: (payload: ImportFromApplyPayload) => void
+  catalogSources?: { id: string; label: string }[]
 }
 
 /** Group children by parent id (only when parent exists in the same template). */
@@ -84,7 +88,6 @@ function getAncestorIds(id: string, types: AssetType[]): string[] {
   return out
 }
 
-/** All descendant ids (not including `id`). */
 function getDescendantIds(id: string, childrenByParent: Map<string, AssetType[]>): string[] {
   const out: string[] = []
   const walk = (pid: string) => {
@@ -97,14 +100,14 @@ function getDescendantIds(id: string, childrenByParent: Map<string, AssetType[]>
   return out
 }
 
+type TreeCheckboxState = "checked" | "unchecked" | "indeterminate"
+
 function subtreeIds(
   id: string,
   childrenByParent: Map<string, AssetType[]>
 ): string[] {
   return [id, ...getDescendantIds(id, childrenByParent)]
 }
-
-type TreeCheckboxState = "checked" | "unchecked" | "indeterminate"
 
 function subtreeSelectionState(
   id: string,
@@ -210,19 +213,20 @@ function AssetTypeTreeBranch({
   )
 }
 
-export function CopyFromTemplateDialog({
+export function ImportFromTemplateDialog({
   open,
   onOpenChange,
   templates,
   currentTemplateId,
   getAssetTypesForTemplate,
+  getFieldsetsForTemplate,
   onApply,
-}: CopyFromTemplateDialogProps) {
+  catalogSources,
+}: ImportFromTemplateDialogProps) {
   const [sourceId, setSourceId] = useState("")
-  const [copyFieldsets, setCopyFieldsets] = useState(true)
   const [mode, setMode] = useState<"replace" | "merge">("merge")
   const [selectedTypeIds, setSelectedTypeIds] = useState<Set<string>>(new Set())
-  /** Node ids with children that are expanded (default: all expanded when source changes). */
+  const [selectedFieldsetKeys, setSelectedFieldsetKeys] = useState<Set<string>>(new Set())
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
 
   const sourceTypes = useMemo(
@@ -230,25 +234,47 @@ export function CopyFromTemplateDialog({
     [sourceId, getAssetTypesForTemplate]
   )
 
+  const sourceFieldsets = useMemo(
+    () => (sourceId ? getFieldsetsForTemplate(sourceId) : {}),
+    [sourceId, getFieldsetsForTemplate]
+  )
+
+  const fieldsetEntries = useMemo(() => {
+    return Object.keys(sourceFieldsets)
+      .sort((a, b) => a.localeCompare(b))
+      .map((key) => ({ key, data: sourceFieldsets[key]! }))
+  }, [sourceFieldsets])
+
   const childrenByParent = useMemo(() => buildChildrenByParent(sourceTypes), [sourceTypes])
 
   const roots = useMemo(() => getRoots(sourceTypes), [sourceTypes])
 
+  const hasTypeHierarchy = sourceTypes.length > 0
+
   useEffect(() => {
-    if (!open || templates.length === 0) return
-    const preferred =
-      templates.find((t) => t.id !== currentTemplateId) ?? templates[0]
+    if (!open) return
+    const catalogIds = new Set((catalogSources ?? []).map((s) => s.id))
+    const validPrev = (id: string) =>
+      catalogIds.has(id) || templates.some((t) => t.id === id)
     setSourceId((prev) => {
-      if (prev && templates.some((t) => t.id === prev)) return prev
+      if (prev && validPrev(prev)) return prev
+      const firstCatalog = catalogSources?.[0]?.id
+      if (firstCatalog) return firstCatalog
+      const preferred = templates.find((t) => t.id !== currentTemplateId) ?? templates[0]
       return preferred?.id ?? ""
     })
-  }, [open, templates, currentTemplateId])
+  }, [open, templates, currentTemplateId, catalogSources])
 
   useEffect(() => {
     if (!sourceId) return
     const types = getAssetTypesForTemplate(sourceId)
     setSelectedTypeIds(new Set(types.map((t) => t.id)))
   }, [sourceId, getAssetTypesForTemplate, open])
+
+  useEffect(() => {
+    if (!open || !sourceId || hasTypeHierarchy) return
+    setSelectedFieldsetKeys(new Set(Object.keys(getFieldsetsForTemplate(sourceId))))
+  }, [open, sourceId, hasTypeHierarchy, getFieldsetsForTemplate])
 
   useEffect(() => {
     if (!sourceId || sourceTypes.length === 0) {
@@ -304,43 +330,64 @@ export function CopyFromTemplateDialog({
     setSelectedTypeIds(new Set())
   }
 
-  /** With types in the source, at least one type must be selected (required for fieldsets too). */
-  const canApply =
-    !!sourceId &&
-    (sourceTypes.length === 0 ? copyFieldsets : selectedTypeIds.size > 0)
+  const selectAllFieldsets = () => {
+    setSelectedFieldsetKeys(new Set(Object.keys(sourceFieldsets)))
+  }
+
+  const clearFieldsets = () => {
+    setSelectedFieldsetKeys(new Set())
+  }
+
+  const toggleFieldsetKey = (key: string, checked: boolean) => {
+    setSelectedFieldsetKeys((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }
+
+  const canApply = !!sourceId && (hasTypeHierarchy ? selectedTypeIds.size > 0 : selectedFieldsetKeys.size > 0)
 
   const handleApply = () => {
     if (!canApply) return
     onApply({
       sourceTemplateId: sourceId,
-      copyFieldsets,
       mode,
-      selectedAssetTypeIds: Array.from(selectedTypeIds),
+      selectedAssetTypeIds: hasTypeHierarchy ? Array.from(selectedTypeIds) : [],
+      ...(!hasTypeHierarchy ? { selectedFieldsetKeys: Array.from(selectedFieldsetKeys) } : {}),
     })
     onOpenChange(false)
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-xl max-h-[90vh] flex flex-col">
         <DialogHeader className="space-y-1">
           <DialogTitle className="flex items-center gap-2 text-lg">
-            <Copy className="h-5 w-5 shrink-0" />
-            Copy from template
+            <FolderInput className="h-5 w-5 shrink-0" />
+            Import from asset settings or template
           </DialogTitle>
           <DialogDescription className="text-sm">
-            Choose a template, pick asset types, and optionally include fieldsets.
+            Choose a source and select asset type branches to import. Every fieldset those types use is copied with them,
+            including per-project fieldset assignments from the source when they match imported keys. Use Replace or Merge
+            to control how this template combines with imports.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-1 overflow-y-auto min-h-0 flex-1">
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Template</Label>
+            <Label className="text-xs text-muted-foreground">Source</Label>
             <Select value={sourceId} onValueChange={setSourceId}>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Choose template" />
+                <SelectValue placeholder="Choose source" />
               </SelectTrigger>
               <SelectContent>
+                {(catalogSources ?? []).map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.label}
+                  </SelectItem>
+                ))}
                 {templates.map((t) => (
                   <SelectItem key={t.id} value={t.id}>
                     {t.name}
@@ -351,12 +398,12 @@ export function CopyFromTemplateDialog({
             </Select>
           </div>
 
-          <div className="space-y-2.5 rounded-lg border bg-muted/15 p-3">
+          <div className="space-y-4 rounded-lg border bg-muted/15 p-3">
             {sourceTypes.length > 0 && (
               <div className="space-y-2 border-l-2 border-orange-500/40 pl-3 ml-0.5">
                 <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                   <div className="flex items-center gap-1">
-                    <span className="text-xs font-medium text-muted-foreground">Asset types</span>
+                    <span className="text-xs font-semibold text-foreground">1. Select asset types</span>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
@@ -368,8 +415,8 @@ export function CopyFromTemplateDialog({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="right" className="max-w-[260px]">
-                        Expand or collapse branches with the arrows. Checkboxes include the subtree;
-                        missing parents are added when you copy.
+                        Expand or collapse branches with the arrows. Checkboxes include the subtree; missing parents are
+                        added when you import.
                       </TooltipContent>
                     </Tooltip>
                   </div>
@@ -406,7 +453,7 @@ export function CopyFromTemplateDialog({
                     </Button>
                   </div>
                 </div>
-                <ScrollArea className="h-[min(260px,42vh)] rounded-md border bg-background/80">
+                <ScrollArea className="h-[min(220px,38vh)] rounded-md border bg-background/80">
                   <div className="p-2">
                     <AssetTypeTreeBranch
                       nodes={roots}
@@ -419,45 +466,78 @@ export function CopyFromTemplateDialog({
                     />
                   </div>
                 </ScrollArea>
+                {selectedTypeIds.size === 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Select at least one branch. Fieldsets and project assignments for those types are imported
+                    automatically.
+                  </p>
+                )}
               </div>
             )}
 
             {sourceTypes.length === 0 && (
-              <p className="text-xs text-muted-foreground border-l-2 border-muted pl-3 ml-0.5">
-                No asset types in this template — only fieldsets below can be copied.
-              </p>
+              <>
+                <p className="text-xs text-muted-foreground border-l-2 border-muted pl-3 ml-0.5">
+                  This source has no asset types. Choose fieldset definitions to import (and any matching project
+                  assignments from the source).
+                </p>
+                <div className="space-y-2 border-l-2 border-orange-500/40 pl-3 ml-0.5">
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                    <span className="text-xs font-semibold text-foreground">Select fieldsets</span>
+                    <div className="flex flex-wrap gap-0.5 justify-end">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={selectAllFieldsets}
+                        disabled={fieldsetEntries.length === 0}
+                      >
+                        All
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={clearFieldsets}
+                        disabled={fieldsetEntries.length === 0}
+                      >
+                        None
+                      </Button>
+                    </div>
+                  </div>
+                  {fieldsetEntries.length === 0 ? (
+                    <p className="text-xs text-amber-800 dark:text-amber-200 border border-amber-500/30 rounded-md px-2 py-1.5">
+                      This source has no fieldsets. Pick another template or asset settings.
+                    </p>
+                  ) : (
+                    <ScrollArea className="h-[min(240px,40vh)] rounded-md border bg-background/80">
+                      <ul className="divide-y divide-border p-0">
+                        {fieldsetEntries.map(({ key, data }) => {
+                          const checked = selectedFieldsetKeys.has(key)
+                          return (
+                            <li key={key}>
+                              <label className="flex cursor-pointer items-start gap-2 px-2 py-2 hover:bg-muted/50">
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(v) => toggleFieldsetKey(key, v === true)}
+                                  className="mt-0.5"
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block font-mono text-xs text-orange-600">{key}</span>
+                                  <span className="text-sm text-foreground">{data.name || key}</span>
+                                </span>
+                              </label>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </ScrollArea>
+                  )}
+                </div>
+              </>
             )}
-
-            <div className="flex items-start gap-2 pt-0.5">
-              <Checkbox
-                id="copy-fieldsets"
-                checked={copyFieldsets}
-                onCheckedChange={(v) => setCopyFieldsets(!!v)}
-                className="mt-0.5"
-              />
-              <div className="flex min-w-0 flex-1 items-start gap-1">
-                <Label htmlFor="copy-fieldsets" className="font-medium cursor-pointer leading-snug">
-                  Fieldsets
-                </Label>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className="mt-0.5 shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      aria-label="About fieldsets"
-                    >
-                      <Info className="h-3.5 w-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right" className="max-w-[260px]">
-                    When checked: copy matching fieldsets from the source. When unchecked: copied asset
-                    types use <span className="font-medium">Procore Default</span> only (no custom
-                    fieldsets from the source). When the source has asset types, select at least one
-                    type above.
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </div>
           </div>
 
           <div className="space-y-1.5">
@@ -494,8 +574,8 @@ export function CopyFromTemplateDialog({
             </RadioGroup>
             <p className="text-[11px] text-muted-foreground px-0.5">
               {mode === "replace"
-                ? "Replace: existing types with the same code and name (and their subtypes) are removed, then the selection is added. Fieldset keys from the source overwrite your matching keys; other local fieldsets stay."
-                : "Merge: types that already match code+name are skipped; new types are added. Fieldsets merge by key: sections with the same name combine fields (union)."}
+                ? "Replace: matching types (and subtypes) are removed before adding imports; each imported fieldset key overwrites your template’s key. Project→fieldset rows from the source for those keys are applied on top of yours."
+                : "Merge: new types are added when code+name don’t match; fieldsets merge by key with section fields unioned. Project→fieldset assignments from the source for imported keys are merged in (same project id overwrites)."}
             </p>
           </div>
         </div>
@@ -509,10 +589,13 @@ export function CopyFromTemplateDialog({
             disabled={!canApply}
             onClick={handleApply}
           >
-            Copy
+            Import
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
+
+/** @deprecated use ImportFromTemplateDialog */
+export const CopyFromTemplateDialog = ImportFromTemplateDialog
